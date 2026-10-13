@@ -1,0 +1,768 @@
+{
+  "duels": [
+    {
+      "desyncs": [],
+      "ending": "exodia",
+      "engine_winner": 0,
+      "expect_kind": "exodia",
+      "expect_winner": 0,
+      "frames": 1125,
+      "hud_notes": [],
+      "hud_turn_mismatch": 0,
+      "hud_wait": 0,
+      "issues": [],
+      "max_turn": 3,
+      "modes": {
+        "deal": 343,
+        "foe": 157,
+        "hand": 1,
+        "over": 326,
+        "result": 298
+      },
+      "name": "ending exodia",
+      "node_count": 3,
+      "node_samples": [
+        {
+          "animations": 0,
+          "board": 0,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 32,
+          "turn": 1,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 5,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 37,
+          "turn": 2,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 11,
+          "cards": 1,
+          "field_nodes": 1,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 44,
+          "turn": 3,
+          "world": 7
+        }
+      ],
+      "opponent": 5,
+      "reason": "finished",
+      "seed": 9001,
+      "setup": "exodia",
+      "setup_done": true,
+      "stalls": [],
+      "start": 1,
+      "terrain": 0,
+      "turns": 3,
+      "two_player": false,
+      "winner": 0
+    },
+    {
+      "desyncs": [],
+      "ending": "deck_out",
+      "engine_winner": 1,
+      "expect_kind": "deck_out",
+      "expect_winner": 1,
+      "frames": 812,
+      "hud_notes": [],
+      "hud_turn_mismatch": 0,
+      "hud_wait": 0,
+      "issues": [],
+      "max_turn": 3,
+      "modes": {
+        "deal": 343,
+        "foe": 136,
+        "hand": 1,
+        "over": 31,
+        "result": 301
+      },
+      "name": "ending deck-out loss",
+      "node_count": 3,
+      "node_samples": [
+        {
+          "animations": 0,
+          "board": 0,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 32,
+          "turn": 1,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 0,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 32,
+          "turn": 2,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 7,
+          "cards": 1,
+          "field_nodes": 1,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 40,
+          "turn": 3,
+          "world": 7
+        }
+      ],
+      "opponent": 12,
+      "reason": "finished",
+      "seed": 9002,
+      "setup": "deckout_loss",
+      "setup_done": true,
+      "stalls": [],
+      "start": 1127,
+      "terrain": 2,
+      "turns": 3,
+      "two_player": false,
+      "winner": 1
+    },
+    {
+      "desyncs": [],
+      "ending": "deck_out",
+      "engine_winner": 0,
+      "expect_kind": "deck_out",
+      "expect_winner": 0,
+      "frames": 679,
+      "hud_notes": [],
+      "hud_turn_mismatch": 0,
+      "hud_wait": 0,
+      "issues": [],
+      "max_turn": 2,
+      "modes": {
+        "deal": 343,
+        "hand": 1,
+        "over": 30,
+        "result": 305
+      },
+      "name": "ending deck-out win",
+      "node_count": 2,
+      "node_samples": [
+        {
+          "animations": 0,
+          "board": 0,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 32,
+          "turn": 1,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 11,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 44,
+          "turn": 2,
+          "world": 8
+        }
+      ],
+      "opponent": 30,
+      "reason": "finished",
+      "seed": 9003,
+      "setup": "deckout_win",
+      "setup_done": true,
+      "stalls": [],
+      "start": 1940,
+      "terrain": 4,
+      "turns": 2,
+      "two_player": false,
+      "winner": 0
+    },
+    {
+      "desyncs": [],
+      "ending": "lp",
+      "engine_winner": 1,
+      "expect_kind": "lp",
+      "expect_winner": 0,
+      "frames": 2253,
+      "hud_notes": [],
+      "hud_turn_mismatch": 0,
+      "hud_wait": 0,
+      "issues": [
+        "expected winner 0, got 1"
+      ],
+      "leak_suspect": true,
+      "max_turn": 8,
+      "modes": {
+        "deal": 403,
+        "dest": 41,
+        "field": 202,
+        "foe": 826,
+        "hand": 288,
+        "over": 176,
+        "result": 306,
+        "star": 11
+      },
+      "name": "ending life points win",
+      "node_count": 8,
+      "node_samples": [
+        {
+          "animations": 0,
+          "board": 0,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 32,
+          "turn": 1,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 5,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 37,
+          "turn": 2,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 122,
+          "cards": 1,
+          "field_nodes": 1,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 155,
+          "turn": 3,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 4,
+          "cards": 2,
+          "field_nodes": 2,
+          "fx": 0,
+          "hud": 9,
+          "nodes": 41,
+          "turn": 4,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 4,
+          "cards": 3,
+          "field_nodes": 3,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 39,
+          "turn": 5,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 5,
+          "cards": 3,
+          "field_nodes": 3,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 40,
+          "turn": 6,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 122,
+          "cards": 3,
+          "field_nodes": 3,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 157,
+          "turn": 7,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 5,
+          "cards": 3,
+          "field_nodes": 3,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 40,
+          "turn": 8,
+          "world": 7
+        }
+      ],
+      "nodes_early": 34,
+      "nodes_late": 98,
+      "opponent": 20,
+      "reason": "finished",
+      "seed": 9004,
+      "setup": "lp_win",
+      "setup_done": true,
+      "stalls": [],
+      "start": 2620,
+      "terrain": 1,
+      "turns": 8,
+      "two_player": false,
+      "winner": 1
+    },
+    {
+      "desyncs": [],
+      "ending": "lp",
+      "engine_winner": 1,
+      "expect_kind": "lp",
+      "expect_winner": 1,
+      "frames": 1270,
+      "hud_notes": [],
+      "hud_turn_mismatch": 0,
+      "hud_wait": 0,
+      "issues": [],
+      "max_turn": 4,
+      "modes": {
+        "deal": 403,
+        "dest": 35,
+        "field": 39,
+        "foe": 221,
+        "hand": 91,
+        "over": 149,
+        "result": 315,
+        "star": 17
+      },
+      "name": "ending life points loss",
+      "node_count": 4,
+      "node_samples": [
+        {
+          "animations": 0,
+          "board": 0,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 32,
+          "turn": 1,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 4,
+          "cards": 1,
+          "field_nodes": 1,
+          "fx": 0,
+          "hud": 8,
+          "nodes": 39,
+          "turn": 2,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 4,
+          "cards": 2,
+          "field_nodes": 2,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 38,
+          "turn": 3,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 4,
+          "cards": 3,
+          "field_nodes": 3,
+          "fx": 0,
+          "hud": 8,
+          "nodes": 41,
+          "turn": 4,
+          "world": 7
+        }
+      ],
+      "opponent": 7,
+      "reason": "finished",
+      "seed": 9005,
+      "setup": "lp_loss",
+      "setup_done": true,
+      "stalls": [],
+      "start": 4874,
+      "terrain": 6,
+      "turns": 4,
+      "two_player": false,
+      "winner": 1
+    },
+    {
+      "desyncs": [],
+      "ending": "lp",
+      "engine_winner": 1,
+      "expect_kind": "lp",
+      "expect_winner": -1,
+      "frames": 3307,
+      "hud_notes": [],
+      "hud_turn_mismatch": 0,
+      "hud_wait": 0,
+      "issues": [],
+      "leak_suspect": true,
+      "max_turn": 8,
+      "modes": {
+        "deal": 615,
+        "dest": 235,
+        "field": 967,
+        "hand": 744,
+        "over": 119,
+        "result": 328,
+        "star": 37,
+        "target": 262
+      },
+      "name": "ending two-player",
+      "node_count": 8,
+      "node_samples": [
+        {
+          "animations": 0,
+          "board": 7,
+          "cards": 0,
+          "field_nodes": 0,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 39,
+          "turn": 1,
+          "world": 7
+        },
+        {
+          "animations": 2,
+          "board": 7,
+          "cards": 2,
+          "field_nodes": 1,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 41,
+          "turn": 2,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 100,
+          "cards": 1,
+          "field_nodes": 1,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 133,
+          "turn": 3,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 11,
+          "cards": 1,
+          "field_nodes": 1,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 44,
+          "turn": 4,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 126,
+          "cards": 1,
+          "field_nodes": 1,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 159,
+          "turn": 5,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 11,
+          "cards": 2,
+          "field_nodes": 2,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 45,
+          "turn": 6,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 126,
+          "cards": 2,
+          "field_nodes": 2,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 160,
+          "turn": 7,
+          "world": 7
+        },
+        {
+          "animations": 0,
+          "board": 11,
+          "cards": 2,
+          "field_nodes": 2,
+          "fx": 0,
+          "hud": 6,
+          "nodes": 45,
+          "turn": 8,
+          "world": 7
+        }
+      ],
+      "nodes_early": 40,
+      "nodes_late": 102,
+      "opponent": 0,
+      "reason": "finished",
+      "seed": 9006,
+      "setup": "two_lp",
+      "setup_done": true,
+      "stalls": [],
+      "start": 6145,
+      "terrain": 3,
+      "turns": 8,
+      "two_player": true,
+      "winner": 1
+    }
+  ],
+  "presses": {
+    "busy|4194309": {
+      "changes": 1,
+      "presses": 12
+    },
+    "busy|65": {
+      "changes": 3,
+      "presses": 18
+    },
+    "busy|68": {
+      "changes": 0,
+      "presses": 16
+    },
+    "busy|69": {
+      "changes": 0,
+      "presses": 15
+    },
+    "busy|70": {
+      "changes": 1,
+      "presses": 13
+    },
+    "busy|81": {
+      "changes": 0,
+      "presses": 11
+    },
+    "deal|4194309": {
+      "changes": 0,
+      "presses": 17
+    },
+    "deal|68": {
+      "changes": 0,
+      "presses": 21
+    },
+    "deal|69": {
+      "changes": 1,
+      "presses": 35
+    },
+    "deal|81": {
+      "changes": 1,
+      "presses": 27
+    },
+    "dest|4194320": {
+      "changes": 4,
+      "presses": 8
+    },
+    "dest|4194322": {
+      "changes": 4,
+      "presses": 10
+    },
+    "dest|65": {
+      "changes": 3,
+      "presses": 4
+    },
+    "dest|68": {
+      "changes": 13,
+      "presses": 18
+    },
+    "dest|69": {
+      "changes": 8,
+      "presses": 26
+    },
+    "dest|81": {
+      "changes": 3,
+      "presses": 3
+    },
+    "dest|82": {
+      "changes": 8,
+      "presses": 9
+    },
+    "field|4194309": {
+      "changes": 13,
+      "presses": 18
+    },
+    "field|4194320": {
+      "changes": 9,
+      "presses": 14
+    },
+    "field|4194322": {
+      "changes": 4,
+      "presses": 17
+    },
+    "field|65": {
+      "changes": 34,
+      "presses": 37
+    },
+    "field|68": {
+      "changes": 30,
+      "presses": 38
+    },
+    "field|69": {
+      "changes": 4,
+      "presses": 52
+    },
+    "field|81": {
+      "changes": 0,
+      "presses": 8
+    },
+    "field|82": {
+      "changes": 0,
+      "presses": 16
+    },
+    "foe|4194309": {
+      "changes": 0,
+      "presses": 9
+    },
+    "foe|68": {
+      "changes": 0,
+      "presses": 8
+    },
+    "foe|69": {
+      "changes": 0,
+      "presses": 5
+    },
+    "foe|81": {
+      "changes": 0,
+      "presses": 4
+    },
+    "hand|4194309": {
+      "changes": 6,
+      "presses": 33
+    },
+    "hand|65": {
+      "changes": 8,
+      "presses": 32
+    },
+    "hand|68": {
+      "changes": 15,
+      "presses": 72
+    },
+    "hand|69": {
+      "changes": 11,
+      "presses": 50
+    },
+    "hand|70": {
+      "changes": 10,
+      "presses": 34
+    },
+    "hand|81": {
+      "changes": 4,
+      "presses": 17
+    },
+    "hand|82": {
+      "changes": 6,
+      "presses": 23
+    },
+    "hand|84": {
+      "changes": 1,
+      "presses": 8
+    },
+    "over|4194309": {
+      "changes": 1,
+      "presses": 6
+    },
+    "over|68": {
+      "changes": 0,
+      "presses": 6
+    },
+    "over|69": {
+      "changes": 1,
+      "presses": 7
+    },
+    "over|81": {
+      "changes": 0,
+      "presses": 10
+    },
+    "result|4194321": {
+      "changes": 0,
+      "presses": 44
+    },
+    "result|65": {
+      "changes": 0,
+      "presses": 58
+    },
+    "result|68": {
+      "changes": 0,
+      "presses": 74
+    },
+    "result|69": {
+      "changes": 0,
+      "presses": 110
+    },
+    "star|68": {
+      "changes": 8,
+      "presses": 8
+    },
+    "star|69": {
+      "changes": 7,
+      "presses": 7
+    },
+    "star|81": {
+      "changes": 1,
+      "presses": 1
+    },
+    "target|65": {
+      "changes": 0,
+      "presses": 20
+    },
+    "target|68": {
+      "changes": 0,
+      "presses": 18
+    },
+    "target|69": {
+      "changes": 2,
+      "presses": 20
+    },
+    "target|81": {
+      "changes": 1,
+      "presses": 7
+    }
+  },
+  "totals": {
+    "budget": 0,
+    "desyncs": 0,
+    "duels": 6,
+    "endings": {
+      "deck_out": 2,
+      "exodia": 1,
+      "lp": 3
+    },
+    "errors": 0,
+    "forced_bad": 1,
+    "forced_ok": 5,
+    "frames": 9446,
+    "hud_turn_mismatch": 0,
+    "leaks": 2,
+    "result_missing": 0,
+    "stalls": 0,
+    "turns": 28,
+    "two_player": 1
+  }
+}

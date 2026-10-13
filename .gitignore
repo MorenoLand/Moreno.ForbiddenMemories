@@ -1,0 +1,13 @@
+.godot/
+.import/
+SESSION*/
+build/
+# assets/ is written by tools/extract.py from the user's own disc; nothing in it is committed
+assets/
+mods/
+*.bin
+*.cue
+*.iso
+*.mrg
+*.MRG
+__pycache__/
