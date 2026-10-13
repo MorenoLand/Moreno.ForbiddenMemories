@@ -3,7 +3,7 @@ extends Control
 ## pictures (assets/screens/duel_result/, baked by tools/extract.py --screens) and text (assets/screens/text.json, text_bank.bin).
 ## The rank (score, letter and tier), the starchip prize and the card dealt from the opponent's drop pool are worked out by the
 ## static functions below, which follow the rank score sum, the result rewards update and the card drop selection. They take no
-## scene state, so DuelResult.evaluate() can be run headless (scratchpad tests).
+## scene state, so DuelResult.evaluate() can be run headless.
 ## Input: `stats` (set before the screen enters the tree): {"winner": 0|1, "opponent_id": n (-1: none), "seed": n (optional),
 ## "sides": [side0, side1]}, where each side has result_adjustment (+2 at zero LP, +40 Exodia, -40 deck-out, else 0), turns_taken,
 ## effective_attacks, defensive_wins, face_down_plays, pure_magic_used, traps_triggered, fusions_initiated, equips_used, change_field,

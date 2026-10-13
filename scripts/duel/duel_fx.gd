@@ -19,6 +19,7 @@ extends Node2D
 const DuelEffects := preload("res://scripts/duel/duel_effects.gd")
 const EffectCanvas := preload("res://scripts/duel/effects/effect_canvas.gd")   # the picture of a ported effect program (effects/)
 const EffectRegistry := preload("res://scripts/duel/effects/effect_registry.gd")
+const CardView := preload("res://scripts/ui/card_view.gd")   # split_ink: a card view ink piece's texels laid over and subtracted
 
 const CARD_UI := "res://assets/screens/card_ui/"
 const CENTRE := Vector2(160, 108)                # the game's centre line (108) and the picture's middle
@@ -71,6 +72,7 @@ var locks: Dictionary = {}                        # side -> Rect2 of the monster
 var battle_running := false                       # a battle sequence plays: the FIELD box and the life-point panel are off the picture
 var battle_view := false                         # a battle has the view on the hand view (the field view gives way for the battle's length)
 var battle_view_t := 0                           # ticks since the battle's swing to the hand view began
+var view_hold := false                          # the field view is held on a trap's zone (the pan of an attack into a trap): the cursor does not refocus
 const BATTLE_VIEW_HOLD := 104                    # the reference: the swing starts 11 frames after the attack's confirm and the field view returns 115 frames after it
 var rng := RandomNumberGenerator.new()
 var card_views: Dictionary = {}                   # card id -> the close-up texture (_card_view)
@@ -289,6 +291,7 @@ func _finish() -> void:
 	active = false
 	battle_running = false
 	battle_view = false
+	view_hold = false
 	beats.clear()
 	beat_running = false
 	sequence_t = 0
@@ -526,6 +529,9 @@ func _build(events: Array, context: Dictionary) -> void:
 	if card > 0:
 		var also := Callable()
 		if DuelEffects.is_ritual(card) and events.any(func(e): return str(e["kind"]) == "summon"):
+			# the tributes leave the picture with the card's window (the reference's ritual shows none of them until the apply)
+			for record in _ritual_tributes(events, int(context.get("side", 0))):
+				_hide(record)
 			also = _ritual_start(card, events, int(context.get("side", 0)))
 		_window(card, int(context.get("side", 0)), also)
 	# a monster removal (the removal cards and Crush Card): effect 15 over the removed monsters, then their fragments (effect 11)
@@ -534,6 +540,16 @@ func _build(events: Array, context: Dictionary) -> void:
 	var i := 0
 	while i < events.size():
 		var kind := str(events[i]["kind"])
+		if kind == "trap" and int(context.get("attacker", -1)) >= 0:
+			# an attack into a trap: the attacker's removal comes with the attack (the engine lists it right after the trap)
+			var gone: Array = []
+			var j := i + 1
+			while j < events.size() and (str(events[j]["kind"]) == "destroyed" or str(events[j]["kind"]) == "remove"):
+				gone.append(events[j])
+				j += 1
+			_attack_trap(events[i], gone)
+			i = j
+			continue
 		if kind == "destroyed" or kind == "remove":
 			var group: Array = []
 			while i < events.size() and (str(events[i]["kind"]) == "destroyed" or str(events[i]["kind"]) == "remove"):
@@ -670,12 +686,20 @@ func _battle(e: Dictionary, ctx: Dictionary) -> void:
 
 ## The ritual apply (effect 22): the tributes (the monsters the ritual's remove events name) are passed to the program, which moves and
 ## hides them through the card-object channel. The phase is the ritual card's id.
-func _ritual_start(card: int, events: Array, side: int) -> Callable:
+func _ritual_tributes(events: Array, side: int) -> Array:
 	var tributes: Array = []
 	for e in events:
 		if str(e["kind"]) == "remove" and str(e.get("row", "")) == "monsters" and int(e["side"]) == side:
 			tributes.append(_rec(side, "monsters", int(e["zone"])))
+	return tributes
+
+
+func _ritual_start(card: int, events: Array, side: int) -> Callable:
+	var tributes := _ritual_tributes(events, side)
 	return func() -> void:
+		for record in tributes:
+			_unhide(record)         # the apply shows its tributes (they were taken off the picture with the window)
+		hand_hidden = true          # the hand stays off the picture through the apply
 		_program(22, card, {"x": 0, "y": 0, "z": 0, "seed": card + 22, "tributes": tributes, "side": side})
 
 
@@ -790,6 +814,36 @@ func _hit(result: int) -> bool:
 	return _program(2, maxi(level + 3, 0), {"x": 240, "y": 120, "number": result, "seed": result + 2})
 
 
+## The attack into a trap (the reference's trap battle, the same beats as its battle): the view swings to the hand view as the attacker
+## leaves (its removal is the first beat), the field view pans to the trap's row, and the trap springs TRAP_SPRING_AT frames after the
+## attacker's removal (the reference: the attacker gone at 1792, the trap's effect at 1888; the trap is a card back until then).
+const TRAP_SPRING_AT := 96
+const TRAP_SPRING_HOLD := 40          # the spring's own beat: effect 8 and the card's turn-away (the trap leaves its cell)
+const DESTROY_FRAMES := 22            # a destruction's beat: the card shrinks and fades where it stands (_destroy)
+
+
+func _attack_trap(e: Dictionary, gone: Array) -> void:
+	var record := _rec(int(e["side"]), "traps", int(e["zone"]))
+	var swing := func() -> void:
+		battle_view = true
+		battle_view_t = 0
+		if field != null:
+			field.swing_out()
+	_beat(swing, 0)
+	if not gone.is_empty():
+		_destroy(gone)
+	var pan := func() -> void:
+		battle_view = false             # the pan holds the view: the battle view's own return (tick) does not refocus the cursor
+		view_hold = true
+		if field != null:
+			field.pan_to(record)
+	_beat(pan, 0)
+	# the wait ends TRAP_SPRING_AT frames after the attacker's removal: the removal's own beat (_destroy's 22 frames) is part of it
+	var wait := TRAP_SPRING_AT - (DESTROY_FRAMES if not gone.is_empty() else 0)
+	_beat(func() -> void: pass, maxi(wait, 0))
+	_trap(e)
+
+
 func _trap(e: Dictionary) -> void:
 	var record := _rec(int(e["side"]), "traps", int(e["zone"]))
 	var id := int(e["id"])
@@ -805,7 +859,7 @@ func _trap(e: Dictionary) -> void:
 			_drop(record)
 		_card(back, _rect(record), 40, 0, anim, _face(id), 0.5, done)
 		_ring(_rect(record).get_center(), GOLD, 30, 16)
-	_beat(spring, 40)
+	_beat(spring, TRAP_SPRING_HOLD)
 
 
 func _direct(e: Dictionary, ctx: Dictionary) -> void:
@@ -1051,13 +1105,14 @@ func _destroy(group: Array) -> void:
 				return {"sx": 1.0 - p, "sy": 1.0 - 0.6 * p, "dy": -8.0 * p, "alpha": 1.0 - p, "rot": 0.8 * p}
 			var done := func() -> void:
 				_drop(record)
-			_card(_texture_of(entry), box, 22, 0, anim, null, 2.0, done)
-	_beat(gone, 22)
+			_card(_texture_of(entry), box, DESTROY_FRAMES, 0, anim, null, 2.0, done)
+	_beat(gone, DESTROY_FRAMES)
 
 
 ## The magic card window (the card-use sequence of the magic presentation): the card lifts off the centre and shrinks away, the card view
 ## swings in, holds, and fades. The group's effect follows the window (its own beat), and the terrain change is its own event (_terrain).
 func _window(card: int, side: int, also: Callable = Callable()) -> void:
+	var group := window_group(card)
 	var window := func() -> void:
 		hand_hidden = true              # the hand leaves the picture while the card-use sequence runs (the reference's card view)
 		var face: Texture2D = _face(card)
@@ -1067,15 +1122,18 @@ func _window(card: int, side: int, also: Callable = Callable()) -> void:
 			return {"dy": 26.0 * t, "sx": 1.0 - 0.4 * t, "sy": 1.0 - 0.4 * t, "alpha": 1.0 - clampf((f - 16.0) / 8.0, 0.0, 1.0)}
 		_card(face, Rect2(CENTRE_AT, HAND_SIZE), WINDOW_LIFT, 0, lift, null, 2.0, Callable())
 		_close_up(_card_view(card), WINDOW_LIFT, CLOSE_UP_TURN, WINDOW_HOLD, CLOSE_UP_FADE)
-		# a ritual's apply (effect 22) starts with its window, and runs over the window's frames
-		if also.is_valid():
-			also.call()
+		# a ritual's start (effect 18, the flash) is with its window: the reference's start request is raised as the card is shown
+		if group == "ritual":
+			_group_effect(group, Rect2(CENTRE - WINDOW_SIZE / 2.0, WINDOW_SIZE), card, side)
 	_beat(window, WINDOW_FRAMES)
 	var show := func() -> void:
 		hand_hidden = false
 	_beat(show, 0)
-	var group := window_group(card)
-	if group != "terrain":
+	# a ritual's apply (effect 22) follows its window: the portal and the tributes come after the card view has gone (the reference's
+	# apply starts about 90 frames after the window's start)
+	if also.is_valid():
+		_beat(also, 0)
+	if group != "terrain" and group != "ritual":
 		var effect := func() -> void:
 			_group_effect(group, Rect2(CENTRE - WINDOW_SIZE / 2.0, WINDOW_SIZE), card, side)
 		_beat(effect, 0)
@@ -1106,24 +1164,25 @@ func _card_view(id: int) -> Texture2D:
 	var plate := Image.load_from_file(NAMEPLATES + "%03d.png" % id)
 	if plate != null:
 		plate.convert(Image.FORMAT_RGBA8)
-		_subtract_plate(base, plate, CARD_VIEW_NAME_AT)
+		_subtract_plate(base, CardView.split_ink(plate)[1], CARD_VIEW_NAME_AT)
 	_blend_card_pieces(base, id)
 	var tex := ImageTexture.create_from_image(base)
 	card_views[id] = tex
 	return tex
 
 
-## The name plate is drawn subtractively over the card's frame (PSX semi-transparency mode 2: the frame less the plate's colour, its
-## 4-bit index 0 clear). `plate` holds each ink's colour to take away (alpha 0 where clear), so the letters come out dark on the bar.
-func _subtract_plate(base: Image, plate: Image, at: Vector2i) -> void:
-	for y in plate.get_height():
-		for x in plate.get_width():
-			var ink := plate.get_pixel(x, y)
+## The name plate's inks are drawn subtractively over the card's frame (PSX semi-transparency mode 2: the frame less the ink's colour;
+## the plate's index 0 is clear). `ink` holds an alpha of 1 where an ink is, its colour being what is taken away, so the letters come
+## out dark on the bar (the reference close-up's letters are black where the frame's green is lightest).
+func _subtract_plate(base: Image, ink: Image, at: Vector2i) -> void:
+	for y in ink.get_height():
+		for x in ink.get_width():
+			var taken := ink.get_pixel(x, y)
 			var q := at + Vector2i(x, y)
-			if ink.a <= 0.0 or q.x < 0 or q.y < 0 or q.x >= base.get_width() or q.y >= base.get_height():
+			if taken.a <= 0.0 or q.x < 0 or q.y < 0 or q.x >= base.get_width() or q.y >= base.get_height():
 				continue
 			var under := base.get_pixel(q.x, q.y)
-			base.set_pixel(q.x, q.y, Color(maxf(under.r - ink.r, 0.0), maxf(under.g - ink.g, 0.0), maxf(under.b - ink.b, 0.0), under.a))
+			base.set_pixel(q.x, q.y, Color(maxf(under.r - taken.r, 0.0), maxf(under.g - taken.g, 0.0), maxf(under.b - taken.b, 0.0), under.a))
 
 
 ## The card_ui pieces of the close-up, blended into the card's image at the reference close-up's places: the attribute (the spell
@@ -1174,12 +1233,10 @@ func _blend_piece(base: Image, ui: Dictionary, name: String, at: Vector2i) -> vo
 		return
 	piece.convert(Image.FORMAT_RGBA8)
 	var at_piece := at + Vector2i(int(entry["x"]), int(entry["y"]))
-	var clut_row := int(entry.get("clut", [0, 0])[1])
-	if clut_row == 248 or clut_row == 249:
-		# the card view's inks (CLUT rows 248 and 249, as the name plate's): subtracted from the frame, not laid over it
-		_subtract_plate(base, piece, at_piece)
-	else:
-		base.blend_rect(piece, Rect2i(Vector2i.ZERO, piece.get_size()), at_piece)
+	# the opaque texels are laid over the frame, the inks (the name plate's ramp) taken away from it
+	var parts: Array = CardView.split_ink(piece)
+	base.blend_rect(parts[0], Rect2i(Vector2i.ZERO, piece.get_size()), at_piece)
+	_subtract_plate(base, parts[1], at_piece)
 
 
 ## A stat as four digit cells right-aligned on the value's place (the leading cells are blank), six pixels apart.

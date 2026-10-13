@@ -34,8 +34,9 @@ const DuelData := preload("res://scripts/duel/duel_data.gd")
 const DuelResult := preload("res://scripts/duel/duel_result.gd")
 const GameState := preload("res://scripts/state/game_state.gd")
 
-const FRAME_BUDGET := 20000        # physics frames a duel may run before it is cut off (the stalemate limit)
+const FRAME_BUDGET := 60000        # physics frames a duel may run before it is cut off (the stalemate limit; the computer's dwells lengthen a duel)
 const MODE_STALL := 600            # frames a mode may hold with no effect busy
+const FOE_STALL := 1500            # frames the computer's turn may hold with nothing busy (its dwells between actions, duel_scene.gd FOE_*)
 const BUSY_STALL := 600            # frames an effect may stay busy
 const OVER_STALL := 1500           # frames the ending may take before its result screen
 const RESULT_STALL := 3000         # frames the result screen may wait for its leave key
@@ -408,9 +409,9 @@ func _observe() -> void:
 		same_mode = 0
 	elif not busy:
 		same_mode += 1
-		if same_mode == MODE_STALL and mode != "over" and mode != "result":
+		if same_mode == (FOE_STALL if mode == "foe" else MODE_STALL) and mode != "over" and mode != "result":
 			_stall("mode %s held %d frames with nothing busy (turn side %d, hand %d, zone %d row %d, set down %s, marks %d, last keys %s)" % [
-					mode, MODE_STALL, engine.state.turn_side, engine.state.sides[0].hand.size(), duel.zone_index, duel.zone_row,
+					mode, same_mode, engine.state.turn_side, engine.state.sides[0].hand.size(), duel.zone_index, duel.zone_row,
 					str(duel.set_down), duel.marks.size(), str(recent_keys)]
 					+ " [Q down %s, cancel edge held %s, help open %s, keys lost %d, hand index %d]" % [
 						str(Input.is_key_pressed(KEY_Q)), str(duel.held.get("cancel", false)), str(duel.help.overlay != null), int(cur.get("keys_lost", 0)), duel.hand_index])

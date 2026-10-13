@@ -321,6 +321,19 @@ func focus(side: int, record: int, frames := TWEEN_FRAMES) -> void:
 	_retarget(frames)
 
 
+## The field view turns to the row of a card record (a trap's zone when an attack springs it) without changing the view side: the
+## field view on, the reference point on the record's row, over VIEW_FRAMES (the reference's pan to the trap).
+func pan_to(record: int) -> void:
+	var slot := slot_of(record)
+	if slot < 0:
+		return
+	near = true
+	focused = slot / 5
+	var refs: Array = layout["reference_z"][view_side][0]
+	target_z = float(refs[focused])
+	_retarget(VIEW_FRAMES, true)
+
+
 ## The battle's view: the field view gives way to the hand view (the reference point goes back to 0), all three values over the
 ## VIEW_FRAMES of the field view's tween (the reference's battle swing: distance 334 to 600, elevation 1022 to 256, z -119 to 0).
 func swing_out() -> void:

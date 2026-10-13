@@ -5,7 +5,7 @@ notices. "Fixed" means the port now matches the disc data and the original's ele
 means the element is still a stand-in or is known to differ. "Reviewed" means a screenshot was looked at and no defect was seen,
 but the element was not compared position by position. "Not audited" means it was not checked.
 
-Evidence screenshots are kept outside the project (in the session scratchpad, not in the repository, since they contain disc art).
+Evidence screenshots are kept outside the project (outside the repository, since they contain disc art).
 The names below refer to them.
 
 ## Library (scripts/menu/library.gd, assets/screens/library/)

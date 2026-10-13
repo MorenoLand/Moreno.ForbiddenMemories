@@ -43,7 +43,18 @@ const BAR_FRAME_OUTSIDE := 8.0                    # the frame is drawn around th
 var bar_frame_texture: Texture2D = null
 const BAR_TEXT := Vector2(16, 208)        # the bar box's text origin: 2 pixels above its top (the text box rule)
 const SYMBOLS := {" ": 0, "<": 84, ">": 81, "/": 68, ".": 11, "'": 27, ",": 31, "-": 48, "#": 60, "&": 67, ":": 0}
-const FOE_THINK := 40        # frames between the opponent's actions
+## The computer's pacing, in frames (one per vblank, the reference's timeline: the phase dwells of the original's turn). The turn's
+## first action waits out the draw phase and its resolution (FOE_DRAW: phases 2 and 3, 16 and 64 frames); then each action waits
+## its own dwell from the visible action before it (_foe_gap). A play is the hand phase (120 frames) and the placement's phase
+## (32), the card shows about 166 frames after the draw; an attack follows the field phase (80 frames); an end after an attack
+## follows the battle's presentation (272 frames) and the field phase's 48.
+const FOE_DRAW := 80
+const FOE_PLAY_WAIT := 166
+const FOE_ATTACK_WAIT := 122
+const FOE_END_WAIT := 122
+const FOE_END_AFTER_ATTACK := 320
+const FOE_DEFENSE_WAIT := 40
+const FOE_EQUIP_WAIT := 122
 
 var data := DuelData.new()
 var cards := CardDB.new()
@@ -123,6 +134,10 @@ var spectator_done := false         # spectator: the match has been left (the qu
 var quit_box = null                 # spectator: the quit confirm (duel_quit.gd) while it is open
 var help = null                     # the controls help: the pulse, the tutorial and the controls menu (duel_help.gd)
 var foe_actions := 0                # spectator: the computer's actions this turn (duel_spectator.gd's FOE_ACTION_LIMIT)
+var foe_next: Dictionary = {}       # the computer's next action, decided ahead of its wait (_foe_decide)
+var foe_due := 0                    # the timer's count at which foe_next is performed
+var foe_clock := 0                  # the frames since the computer's turn began (its hand is dealt over the first frames)
+var foe_prev := ""                  # the kind of the computer's last visible action this turn ("" at the turn's start)
 
 ## The baked cursors (tools/extract.py bake_duel_cursors): the zone cursor's streams and the hand's pointer and order badges.
 const FIELD_ART := "res://assets/screens/duel_field/"
@@ -339,10 +354,21 @@ func _field_cards() -> Array:
 	return out
 
 
+## The computer's hand during its turn, until its first action: its cards in the hand's places, one dealt every FOE_DEAL frames from the
+## turn's start (the reference's computer draw: the backs come in over the first 40 frames), then they leave the picture.
+const FOE_DEAL := 8
+func _draw_foe_hand() -> void:
+	var hand: Array = engine.state.sides[engine.state.turn_side].hand
+	for i in hand.size():
+		if foe_clock < FOE_DEAL * (i + 1):
+			break
+		board.add_child(DuelHand.face(DuelCardFace.foe_hand(), DuelHand.place(i), sharp))
+
+
 ## The camera follows the cursor: the view's reference point moves to the row of the zone the cursor is on.
 func _focus_camera(frames := 8) -> void:
-	if fx != null and fx.battle_view:
-		return                      # the battle's view (duel_fx.gd): the hand view until the battle's presentation has played
+	if fx != null and (fx.battle_view or fx.view_hold):
+		return                      # the battle's view (duel_fx.gd): the hand view until the battle's presentation has played, or the pan to a trap
 	field.show_near(mode in ["dest", "field", "target", "equip_pick", "prompt"])   # the field view while a monster cursor is on the board, the hand view otherwise
 	match mode:
 		"dest", "field", "equip_pick", "prompt":
@@ -386,7 +412,8 @@ func refresh() -> void:
 	_draw_band()                # the information band first: the hand and the text draw over it (the duel frame's draw list)
 	var s = engine.state
 	var hand: Array = s.sides[0].hand
-	for i in (0 if fx != null and fx.hides_hand() else hand.size()):
+	var foe_turn := mode == "foe"                # the computer's turn: the player's hand leaves the picture (the reference's field view)
+	for i in (0 if foe_turn or (fx != null and fx.hides_hand()) else hand.size()):
 		var at: Vector2 = DuelHand.place(i)
 		if mode in CENTRE_MODES and i == hand_index:
 			continue                    # the centred card is drawn by _draw_centre, away from its slot
@@ -403,6 +430,8 @@ func refresh() -> void:
 		# the chosen card in its slot while it is placed: its back with the number (the reference shows it face-down)
 		var shown: Texture2D = _centre_face(int(hand[i]), DuelEngine.hand_slot(s.sides[0], i)) if (mode == "dest" and i == hand_index) else _hand_card_face(int(hand[i]), DuelEngine.hand_slot(s.sides[0], i))
 		board.add_child(DuelHand.face(shown, at, sharp))
+	if foe_turn and foe_actions == 0:
+		_draw_foe_hand()            # the computer's hand shows until its first action (its cards leave the picture as they are played)
 	_draw_badges(hand)
 	_draw_centre(hand)
 	# the terrain name is on the field plate (duel_field_3d.gd), not a text label
@@ -1108,6 +1137,10 @@ func _physics_process(_delta: float) -> void:
 	if not ready_ok:
 		return
 	timer += 1
+	if mode == "foe":
+		foe_clock += 1
+		if foe_actions == 0 and foe_clock <= FOE_DEAL * 6:
+			refresh()               # the computer's hand is dealt in (_draw_foe_hand)
 	_animate_cursors()
 	if mode in CENTRE_MODES:
 		centre_clock += 1
@@ -1465,8 +1498,11 @@ func _begin_turn(p: int) -> void:
 	else:
 		mode = "foe"
 		timer = 0
+		foe_clock = 0
 		foe_actions = 0
+		foe_prev = ""
 		_ai_for(p).begin_turn(p)
+		_foe_decide(p)
 		if spectator and p == 0 and drew > 0:
 			_start_deal(before, drew, -TURN_WAIT)   # a spectator's side 0 draws in view: the cards slide in, then its computer plays
 	refresh()
@@ -1806,13 +1842,36 @@ func _open_result() -> void:
 	add_child(screen)
 
 
+## The computer's next action is decided ahead of its wait: the wait is the action's dwell (FOE_* above) counted from the one before.
+func _foe_decide(p: int) -> void:
+	foe_next = _ai_for(p).next_action(p)
+	var kind := str(foe_next["kind"])
+	foe_due = (FOE_DRAW if foe_actions == 0 else 0) + _foe_gap(kind, foe_prev)
+
+
+## The wait before an action of a kind: the visible actions have their dwell, a noop or a spent zone is no wait.
+func _foe_gap(kind: String, prev: String) -> int:
+	match kind:
+		"play", "set_back":
+			return FOE_PLAY_WAIT
+		"attack":
+			return FOE_ATTACK_WAIT
+		"end":
+			return FOE_END_AFTER_ATTACK if prev == "attack" else FOE_END_WAIT
+		"defense":
+			return FOE_DEFENSE_WAIT
+		"equip":
+			return FOE_EQUIP_WAIT
+	return 0
+
+
 func _foe_step() -> void:
-	if timer < FOE_THINK:
+	if timer < foe_due:
 		return
 	timer = 0
 	var p: int = engine.state.turn_side      # the computer's side: 1, or 0 in a spectator match (side 0 is the computer there too)
 	var ai = _ai_for(p)
-	var action: Dictionary = ai.next_action(p)
+	var action: Dictionary = foe_next
 	foe_actions += 1
 	if spectator and foe_actions > DuelSpectator.FOE_ACTION_LIMIT:
 		action = {"kind": "end"}     # a computer that keeps doing nothing ends its turn (duel_spectator.gd)
@@ -1820,6 +1879,8 @@ func _foe_step() -> void:
 		engine.end_turn(p)
 		_begin_turn(p ^ 1)
 		return
+	if not action["kind"] in ["noop", "spent"]:
+		foe_prev = str(action["kind"])
 	var before: Array = _field_cards()
 	var cards: Array = []           # the card ids the foe plays (a magic or ritual card gets its window)
 	var window := 0
@@ -1835,6 +1896,8 @@ func _foe_step() -> void:
 	var attacker_zone := int(action["zone"]) if action["kind"] == "attack" else -1
 	fx.play(events, before, {"side": p, "attacker": attacker_zone, "card": window, "cards": cards})
 	refresh()
+	if mode == "foe":
+		_foe_decide(p)
 
 
 ## The computer of a side: side 0 in a spectator match, else the foe (side 1).

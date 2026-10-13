@@ -27,6 +27,7 @@ const ScreenFit := preload("res://scripts/system/screen_fit.gd")
 const GameText := preload("res://scripts/ui/game_text.gd")
 const CardDB := preload("res://scripts/data/card_db.gd")
 const ModArt := preload("res://scripts/system/mod_art.gd")
+const CardView := preload("res://scripts/ui/card_view.gd")   # split_ink: the card view inks, laid over the frame or subtracted from it
 const GameState := preload("res://scripts/state/game_state.gd")
 const DIR := "res://assets/screens/"
 const PICS := "res://assets/screens/password/"
@@ -395,17 +396,18 @@ func _ui(name: String, at: Vector2, parent: Node2D) -> void:
 	if not card_ui.has(name):
 		return
 	var entry: Dictionary = card_ui[name]
-	var sprite := Sprite2D.new()
-	sprite.centered = false
-	sprite.texture = _texture_from(CARD_UI + str(entry["file"]))
-	sprite.position = at + Vector2(float(entry["x"]), float(entry["y"]))
-	sprite.material = sharp
-	parent.add_child(sprite)
-
-
-func _texture_from(path: String) -> Texture2D:
-	var image := Image.load_from_file(path)
-	return ImageTexture.create_from_image(image) if image != null else null
+	var image := Image.load_from_file(CARD_UI + str(entry["file"]))
+	if image == null:
+		return
+	# the opaque texels are laid over the frame, the card view's inks (the plates' ramp) subtracted from it
+	var parts: Array = CardView.split_ink(image)
+	for part in [[parts[0], sharp], [parts[1], plate_subtract]]:
+		var sprite := Sprite2D.new()
+		sprite.centered = false
+		sprite.texture = ImageTexture.create_from_image(part[0])
+		sprite.position = at + Vector2(float(entry["x"]), float(entry["y"]))
+		sprite.material = part[1]
+		parent.add_child(sprite)
 
 
 ## A stat as four digit cells right-aligned on `at`, the leading zeros left blank.
@@ -439,11 +441,11 @@ func _build_card() -> void:
 	picture.material = sharp
 	ModArt.apply(picture, art)
 	card_front.add_child(picture)
-	var plate := _texture_from(NAMEPLATE + "%03d.png" % card)
+	var plate := Image.load_from_file(NAMEPLATE + "%03d.png" % card)
 	if plate != null:
 		var name_sprite := Sprite2D.new()
 		name_sprite.centered = false
-		name_sprite.texture = plate
+		name_sprite.texture = ImageTexture.create_from_image(CardView.split_ink(plate)[1])
 		name_sprite.position = NAME_AT
 		name_sprite.material = plate_subtract   # subtracted from the frame: the letters come out dark on the bar
 		card_front.add_child(name_sprite)

@@ -25,6 +25,7 @@ const SCENES := {
 	"equip": {"deck": [4, 315, 5, 6, 7, 8, 9, 10], "hand": [4, 315, 5, 6, 7]},
 	"trap": {"deck": [5, 681, 4, 6, 7, 8, 9, 10], "hand": [5, 681, 4, 6, 7]},
 	"fusion": {"deck": [2, 8, 5, 6, 7, 9, 10, 11], "hand": [2, 8, 5, 6, 7]},
+	"ritual": {"deck": [1, 1, 1, 675, 5, 6, 7, 8, 9, 10], "hand": [1, 1, 1, 675, 5]},
 }
 
 
@@ -80,6 +81,14 @@ func _script() -> Array:
 		"trap":
 			s += [["move_to", 681], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_E], ["until_mode", "dest"], ["key", KEY_E], ["until_idle"], ["wait", 30],
 				["end_turn"], ["until_hand"], ["wait", 30], ["wait", 300]]
+		"ritual":
+			# Ultimate Dragon: three Blue-eyes (3000 ATK, out of the computer's reach) first, one a turn (the field phase after a placement
+			# does not go back to the hand), then the ritual from the hand on the next turn
+			for tribute in [1, 1, 1]:
+				s += [["move_to", tribute], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E],
+					["until_mode", "dest"], ["key", KEY_E], ["wait", 4], ["if_star_confirm"], ["if_star_confirm"], ["until_idle"],
+					["end_turn"], ["until_hand"], ["wait", 30]]   # one placement a turn: the field phase after it does not go back to the hand
+			s += [["cap", true], ["move_to", 675], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E], ["wait", 1000]]
 		"fusion":
 			s += [["move_to", 2], ["key", KEY_F], ["wait", 6], ["move_to", 8], ["key", KEY_F], ["wait", 6], ["key", KEY_E],
 				["wait", 20], ["key", KEY_E], ["wait", 40], ["key", KEY_E], ["wait", 40], ["key", KEY_E], ["wait", 360]]

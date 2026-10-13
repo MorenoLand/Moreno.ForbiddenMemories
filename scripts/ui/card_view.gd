@@ -95,6 +95,23 @@ static func art_at(box: Vector2) -> Vector2:
 	return Vector2(2, box.y - 14)
 
 
+## A card view ink piece (the name plate, the labels and the digits of the card view, baked with alpha 128 on the inks: see
+## tools/extract.py bake_card_ui) split into the texels laid over the frame (opaque) and the inks the frame has taken away
+## (alpha 1 where the ink is; its colour is what is subtracted). Returns [opaque, ink], both RGBA8 of the piece's size.
+static func split_ink(piece: Image) -> Array:
+	piece.convert(Image.FORMAT_RGBA8)
+	var opaque := Image.create(piece.get_width(), piece.get_height(), false, Image.FORMAT_RGBA8)
+	var ink := Image.create(piece.get_width(), piece.get_height(), false, Image.FORMAT_RGBA8)
+	for y in piece.get_height():
+		for x in piece.get_width():
+			var texel := piece.get_pixel(x, y)
+			if texel.a >= 0.99:
+				opaque.set_pixel(x, y, texel)
+			elif texel.a > 0.0:
+				ink.set_pixel(x, y, Color(texel.r, texel.g, texel.b, 1.0))
+	return [opaque, ink]
+
+
 ## The card_ui attribute piece: the monster's attribute, or spell and trap for the other cards.
 func _attribute_piece(data: Dictionary) -> String:
 	match str(data.get("type", "")):

@@ -114,6 +114,15 @@ static func numbered(number: int, back_card: bool) -> Texture2D:
 	return texture
 
 
+## The computer's card in its hand: the plain numbered frame (numbered.png) with no digits, the same for every card (the reference's
+## hand of the computer). The card's kind is not shown.
+static func foe_hand() -> Texture2D:
+	var key := "foe_hand"
+	if not _faces.has(key):
+		_faces[key] = ImageTexture.create_from_image(_image("numbered"))
+	return _faces[key]
+
+
 ## The arrow of a choice (the centre step's green arrows): 16 x 16, left or right.
 static func arrow(right: bool) -> Texture2D:
 	var key := "arrow|%s" % str(right)
