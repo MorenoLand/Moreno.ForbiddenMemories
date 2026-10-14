@@ -527,6 +527,25 @@ func _programs_22() -> void:
 			if not board.shown(40 + k):
 				hidden += 1
 		check("program 22 (ritual %d): finishes within 1500 frames (took %d)" % [ritual, frames], program.done and frames < 1500)
+		if ritual == 670:
+			# the field view: the portal's first frame quads sit where the reference's geometry puts them (tributes at z -95)
+			var first := Canvas.new()
+			root.add_child(first)
+			var fresh_board := StubBoard.new()
+			fresh_board.rows_list = [40, 41, 42]
+			for k in 3:
+				fresh_board.pos[40 + k] = Vector3i(-70 + 70 * k, -24, -95)
+			var first_program = Registry.create(22, first, {"seed": 22, "objects": fresh_board, "tributes": [40, 41, 42], "side": 0})
+			first_program.dispatch(ritual)
+			first.clear()
+			first_program.dispatch(-1)
+			var quads: Array = []
+			for record in first._records:
+				quads.append(record["pts"])
+			var want := PackedVector2Array([Vector2(194, 110), Vector2(231, 110), Vector2(193, 141), Vector2(227, 141)])
+			check("program 22: the portal's quads sit at the field view's points (%s)" % str(quads),
+					quads.size() >= 2 and quads[0].size() == 4 and quads[0][0].distance_to(want[0]) < 2.0 and quads[0][3].distance_to(want[3]) < 2.0)
+			first.queue_free()
 		check("program 22 (ritual %d): the tributes are hidden (%d of 3)" % [ritual, hidden], hidden == 3)
 		check("program 22 (ritual %d): the impact is raised before the finish" % ritual, program.impact)
 		check("program 22 (ritual %d): the board tint is back to neutral" % ritual, board.tint_set == Vector3i(128, 128, 128))

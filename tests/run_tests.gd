@@ -16,6 +16,7 @@ const OpeningMovie = preload("res://scripts/boot/opening_movie.gd")
 const ScreenFit = preload("res://scripts/system/screen_fit.gd")
 const ModArt = preload("res://scripts/system/mod_art.gd")
 const DuelCardFace = preload("res://scripts/duel/duel_card_face.gd")
+const CardView = preload("res://scripts/ui/card_view.gd")
 
 ## a folder that does not exist: the suite runs on the disc's tables alone, with no mod applied
 const NO_MODS := "res://tests/no_mods_folder"
@@ -68,6 +69,7 @@ func _init() -> void:
 	_test_star_icons()
 	_test_display()
 	_test_card_faces()
+	_test_card_viewer()
 	print("")
 	print("%d passed, %d failed, %d assertions" % [passed, failed, passed + failed])
 	quit(0 if failed == 0 else 1)
@@ -524,6 +526,20 @@ func _test_battle() -> void:
 	check("ATK 2000 beats ATK 1500: the defender's side loses 500", eng.state.sides[1].lp == 7500)
 	check("ATK 2000 beats ATK 1500: the attacker counts a card destruction and an effective attack",
 			int(eng.state.sides[0].rank["card_destruction"]) == 1 and int(eng.state.sides[0].rank["effective_attacks"]) == 1)
+	# the battle event carries what the presentation shows after the state has changed (the ids, the guardian star bonus and the positions)
+	var shown_engine = engine(21)
+	shown_engine.start([1, 2, 3], [4, 5, 6])
+	shown_engine.end_turn(0)
+	shown_engine.state.sides[0].monsters[0] = zone(shown_engine, 1, 2000, 2000)
+	shown_engine.state.sides[1].monsters[0] = zone(shown_engine, 1, 1500, 1500, true)
+	var battle_event: Dictionary = {}
+	for event in shown_engine.attack(0, 0, 0):
+		if str(event["kind"]) == "battle":
+			battle_event = event
+	check("battle event: the ids of both cards", int(battle_event.get("attacker_id", 0)) == 1 and
+			int(battle_event.get("target_id", 0)) == 1)
+	check("battle event: the star bonus, 0 for two Blue-Eyes", int(battle_event.get("star", -1)) == 0)
+	check("battle event: the defender's position (defence)", bool(battle_event.get("target_defense", false)))
 	eng = _fight(zone(engine(), 1, 1500, 1500), zone(engine(), 1, 1500, 1500))
 	check("equal ATK: both monsters are destroyed", eng.state.sides[0].monsters[0] == null and eng.state.sides[1].monsters[0] == null)
 	check("equal ATK: no life points lost", eng.state.sides[0].lp == 8000 and eng.state.sides[1].lp == 8000)
@@ -1124,3 +1140,46 @@ func _test_card_faces() -> void:
 	var backdrop: Texture2D = ModArt.plain_texture("res://assets/screens/boot_0.png")
 	check("a region user's texture is the baked picture (320 x 240)", backdrop != null and backdrop.get_image().get_size() == Vector2i(320, 240))
 	group = ""
+
+
+## The card viewer's picture (scripts/ui/card_view.gd, card_picture): the whole card at 1x, 140 x 196, on the frame of its kind, with the
+## picture at (19, 50) of the card and the name plate's ink taken off the frame.
+func _test_card_viewer() -> void:
+	group = "card viewer"
+	check("a magic card has the magic frame", CardView.frame_kind("Magic") == "magic")
+	check("a trap, an equip and a ritual have their own frames", CardView.frame_kind("Trap") == "trap" and CardView.frame_kind("Equip") == "equip" and CardView.frame_kind("Ritual") == "ritual")
+	check("a monster's type is its race: the monster frame", CardView.frame_kind("Dragon") == "monster" and CardView.frame_kind("Fiend") == "monster")
+	var ui: Dictionary = CardView.load_ui()
+	check("the card_ui layout is read", ui.has("label_atk") and ui.has("attribute_spell"))
+	var magic: Image = CardView.card_picture(330, data.card(330), 0, 0, ui)
+	check("a magic card's picture is the whole card, 140 x 196", magic != null and magic.get_size() == Vector2i(140, 196))
+	var frame := Image.load_from_file("res://assets/screens/password/card_frame_magic_0.png")
+	var art := Image.load_from_file("res://assets/images/card_art/330.png")
+	if magic != null and frame != null and art != null:
+		frame.convert(Image.FORMAT_RGBA8)
+		art.convert(Image.FORMAT_RGBA8)
+		check("the card's corner is the frame's corner", magic.get_pixel(0, 0) == frame.get_pixel(0, 0))
+		check("the picture is laid at (19, 50) of the card", magic.get_pixel(19, 50) == art.get_pixel(0, 0) and magic.get_pixel(60, 90) == art.get_pixel(41, 40))
+	var monster: Image = CardView.card_picture(5, data.card(5), 1000, 500, ui)
+	var monster_frame := Image.load_from_file("res://assets/screens/password/card_frame_monster_0.png")
+	check("a monster's picture is the whole card, 140 x 196, on the monster frame",
+			monster != null and monster.get_size() == Vector2i(140, 196) and monster_frame != null and monster.get_pixel(0, 0) == monster_frame.get_pixel(0, 0))
+	# the name plate's ink is subtracted from the frame, and a laid texel covers it
+	var base := Image.create(4, 4, false, Image.FORMAT_RGBA8)
+	base.fill(Color(1.0, 1.0, 1.0, 1.0))
+	var ink := Image.create(2, 1, false, Image.FORMAT_RGBA8)
+	ink.set_pixel(0, 0, Color(0.25, 0.5, 0.75, 1.0))
+	ink.set_pixel(1, 0, Color(0, 0, 0, 0))
+	CardView.subtract_ink(base, ink, Vector2i(1, 2))
+	var taken := base.get_pixel(1, 2)
+	check("the ink is taken off the frame by its colour", absf(taken.r - 0.75) < 0.01 and absf(taken.g - 0.5) < 0.01 and absf(taken.b - 0.25) < 0.01)
+	check("a clear ink texel leaves the frame alone", base.get_pixel(2, 2) == Color(1, 1, 1, 1))
+	var split: Array = CardView.split_ink(_texels([Color(0.2, 0.2, 0.2, 1.0), Color(0.6, 0.6, 0.6, 0.5), Color(0, 0, 0, 0)]))
+	check("a full texel is laid over the frame, a half one is an ink", split[0].get_pixel(0, 0).a > 0.99 and split[1].get_pixel(1, 0).a > 0.99 and split[0].get_pixel(1, 0).a == 0.0)
+
+
+func _texels(colours: Array) -> Image:
+	var image := Image.create(colours.size(), 1, false, Image.FORMAT_RGBA8)
+	for i in colours.size():
+		image.set_pixel(i, 0, colours[i])
+	return image

@@ -33,19 +33,10 @@ const WINDOW_LIFT := 24
 const WINDOW_HOLD := 32
 const CLOSE_UP_TURN := 16                         # the card view swings in from edge-on over this many frames
 const CLOSE_UP_FADE := 16
+const RITUAL_STAND_FRAMES := 36                 # the monster rises into its zone after the view (the reference's field shows it at about +528)
+const RITUAL_VIEW_HOLD := 24                   # the ritual monster's close-up holds this long (the reference's summon view)
 const WINDOW_SIZE := Vector2(140, 196)            # the card view: the card's box (the Password reveal's card size, the reference close-up)
 const WINDOW_CENTRE := Vector2(160, 120)          # the card view's centre on the picture (the reference close-up: its box spans y 22 to 218)
-const CARD_FRAMES := "res://assets/screens/password/"
-const CARD_ART := "res://assets/images/card_art/"
-const NAMEPLATES := "res://assets/images/nameplate/"
-const CARD_VIEW_PICTURE_AT := Vector2i(19, 50)    # the card-detail routine's picture offset (the Password reveal's card)
-const CARD_VIEW_NAME_AT := Vector2i(12, 14)
-const CARD_VIEW_ATTRIBUTE_AT := Vector2i(110, 13)     # the attribute piece (the reference close-up's spell icon, right of the name plate)
-const CARD_VIEW_LABEL_AT := Vector2i(71, 33)          # the kind label's window: "[ Normal Magic Card ]" right-aligned under the name plate
-const CARD_VIEW_LEVEL_AT := Vector2i(119, 32)         # the level stars, the first at the right, nine pixels left each
-const CARD_VIEW_ATK_AT := Vector2i(72, 158)           # the ATK label (its digits from +25 on the same row)
-const CARD_VIEW_DEF_AT := Vector2i(72, 170)
-const CARD_UI_LAYOUT := CARD_UI + "layout.json"
 const HAND_SIZE := Vector2(52, 60)                # a hand card's face (the centre step's card)
 const WHITE := Color(1.0, 1.0, 1.0)
 const GREEN := Color(0.5, 1.0, 0.6)
@@ -66,6 +57,7 @@ var beats: Array = []                             # {start: Callable, hold: int}
 var beat_running := false
 var beat_t := 0
 var beat_hold := 0
+var beat_budget := 0
 var ops: Array = []                               # the things drawn now (see _op)
 var life_hold: Array = [false, false]
 var locks: Dictionary = {}                        # side -> Rect2 of the monster row locked by Swords
@@ -73,11 +65,10 @@ var battle_running := false                       # a battle sequence plays: the
 var battle_view := false                         # a battle has the view on the hand view (the field view gives way for the battle's length)
 var battle_view_t := 0                           # ticks since the battle's swing to the hand view began
 var view_hold := false                          # the field view is held on a trap's zone (the pan of an attack into a trap): the cursor does not refocus
-const BATTLE_VIEW_HOLD := 104                    # the reference: the swing starts 11 frames after the attack's confirm and the field view returns 115 frames after it
+const BATTLE_VIEW_HOLD := 184                    # the reference: the field view comes back about 184 frames after the battle starts (its swing out at the start)
 var rng := RandomNumberGenerator.new()
 var card_views: Dictionary = {}                   # card id -> the close-up texture (_card_view)
-var card_ui_layout: Dictionary = {}               # the card_ui pieces' layout (_card_ui_layout)
-var card_ui_layout_loaded := false
+var card_ui_layout: Dictionary = CardView.load_ui()   # the card_ui pieces' layout (the close-up's pieces, CardView.card_picture)
 var hand_hidden := false                          # the hand is not drawn while a card-use sequence runs (the magic window)
 var programs: Array = []                         # the ported effect programs running: {program, canvas} (effects/effect_registry.gd)
 var object_state: Dictionary = {}                 # record -> the card object state the programs set (CardObjects; the field draws it)
@@ -160,8 +151,12 @@ class CardObjects extends RefCounted:
 	func shown(record: int) -> bool:
 		return bool(_state(record)["shown"])
 
+	## Shows or hides a card object. Showing it again also puts its field entry back (a ritual's tribute leaves the field with the window
+	## and comes back when its flight starts).
 	func set_shown(record: int, on: bool) -> void:
 		_state(record)["shown"] = on
+		if on:
+			owner._unhide(record)
 
 
 ## A card object's board point in game units: its grid cell at the card height (0, 0, 0 without a field).
@@ -239,6 +234,9 @@ func play(events: Array, before: Array, context: Dictionary) -> void:
 ## The watchdog: no sequence may keep input blocked for longer than SEQUENCE_BUDGET frames, and no beat longer than BEAT_BUDGET.
 const SEQUENCE_BUDGET := 1200     # a ritual summon (the window and the apply, effect 22) runs past 600 frames
 const BEAT_BUDGET := 240
+const RITUAL_APPLY_BUDGET := 600   # a ritual's apply waits for its impact (about 450 frames in the reference's timing)
+const RITUAL_APPLY_AT := 64        # the frame of the window at which the ritual's apply starts (its portal is neutral at about +96)
+const RITUAL_VIEW_DELAY := 24      # the ritual monster's close-up follows the impact by this many frames (the reference: +456 at a +432 white)
 var sequence_t := 0
 
 
@@ -260,9 +258,9 @@ func tick() -> void:
 		if beat_running:
 			beat_t += 1
 			_advance()
-			if beat_t >= beat_hold and ops.is_empty() and _blocking() == 0:
+			if beat_t >= beat_hold and _beat_ops_left() == 0 and _blocking() == 0:
 				beat_running = false
-			elif beat_t > beat_hold + BEAT_BUDGET:
+			elif beat_t > beat_hold + beat_budget:
 				push_warning("duel_fx: beat exceeded its budget; dropping its ops")
 				ops.clear()
 				beat_running = false
@@ -271,6 +269,7 @@ func tick() -> void:
 			beat_running = true
 			beat_t = 0
 			beat_hold = int(beat["hold"])
+			beat_budget = int(beat.get("budget", BEAT_BUDGET))
 			var start: Callable = beat["start"]
 			start.call()
 		if not beat_running and beats.is_empty() and _blocking() == 0:
@@ -282,8 +281,17 @@ func tick() -> void:
 	queue_redraw()
 
 
-func _beat(start: Callable, hold: int) -> void:
-	beats.append({"start": start, "hold": hold})
+func _beat(start: Callable, hold: int, budget: int = BEAT_BUDGET) -> void:
+	beats.append({"start": start, "hold": hold, "budget": budget})
+
+
+## The ops that keep the beat going: the held ones (a card that stays on the picture past its beat, e.g. the battle's close-ups) do not.
+func _beat_ops_left() -> int:
+	var count := 0
+	for op in ops:
+		if not bool(op.get("held", false)):
+			count += 1
+	return count
 
 
 func _finish() -> void:
@@ -332,7 +340,8 @@ func _program(id: int, phase: int, context: Dictionary) -> bool:
 	picture.present()
 	# a stage the game sets once the program's impact has landed (the terrain change's -2, after its package loads)
 	programs.append({"id": id, "program": program, "canvas": picture, "stage": int(context.get("stage_on_impact", 0)),
-		"nonblocking": bool(context.get("nonblocking", false)), "side": int(context.get("side", -1))})
+		"nonblocking": bool(context.get("nonblocking", false)), "release_at_impact": bool(context.get("release_at_impact", false)),
+		"side": int(context.get("side", -1))})
 	return true
 
 
@@ -340,15 +349,24 @@ func _program(id: int, phase: int, context: Dictionary) -> bool:
 func _blocking() -> int:
 	var count := 0
 	for entry in programs:
-		if not bool(entry.get("nonblocking", false)):
+		if not _releases(entry):
 			count += 1
 	return count
 
 
+## A program that does not hold the sequence: a nonblocking one, or one that releases at its impact once the impact is raised (a ritual's
+## apply: the summon follows the impact while the apply's picture fades out).
+func _releases(entry: Dictionary) -> bool:
+	if bool(entry.get("nonblocking", false)):
+		return true
+	return bool(entry.get("release_at_impact", false)) and bool(entry["program"].impact)
+
+
+## The programs that outlive the sequence: the nonblocking ones (the Swords field effect), and an apply still fading after its impact.
 func _nonblocking_entries() -> Array:
 	var out: Array = []
 	for entry in programs:
-		if bool(entry.get("nonblocking", false)):
+		if _releases(entry) and not bool(entry["program"].done):
 			out.append(entry)
 	return out
 
@@ -529,9 +547,10 @@ func _build(events: Array, context: Dictionary) -> void:
 	if card > 0:
 		var also := Callable()
 		if DuelEffects.is_ritual(card) and events.any(func(e): return str(e["kind"]) == "summon"):
-			# the tributes leave the picture with the card's window (the reference's ritual shows none of them until the apply)
+			# the tributes leave the picture with the card's window (the reference's ritual shows none of them until the apply's flight)
 			for record in _ritual_tributes(events, int(context.get("side", 0))):
 				_hide(record)
+				objects_channel.set_shown(record, false)
 			also = _ritual_start(card, events, int(context.get("side", 0)))
 		_window(card, int(context.get("side", 0)), also)
 	# a monster removal (the removal cards and Crush Card): effect 15 over the removed monsters, then their fragments (effect 11)
@@ -550,7 +569,8 @@ func _build(events: Array, context: Dictionary) -> void:
 			_attack_trap(events[i], gone)
 			i = j
 			continue
-		if kind == "destroyed" or kind == "remove":
+		if (kind == "destroyed" or kind == "remove") and not (card > 0 and DuelEffects.is_ritual(card)):
+			# a ritual's tributes left the picture with its window and the apply (no destruction of their own)
 			var group: Array = []
 			while i < events.size() and (str(events[i]["kind"]) == "destroyed" or str(events[i]["kind"]) == "remove"):
 				group.append(events[i])
@@ -576,7 +596,9 @@ func _event(e: Dictionary, events: Array, index: int, ctx: Dictionary) -> void:
 			# a face-up summon has the light beam and flash; a set monster just appears (no beam in the reference placement). A monster
 			# that comes back from an equip or a fusion is shown by that presentation, so it only appears here.
 			var after_chain := index > 0 and str(events[index - 1]["kind"]) in ["equip", "fusion"]
-			if bool(e.get("face_down", false)) or after_chain:
+			if DuelEffects.is_ritual(int(ctx.get("card", 0))):
+				_ritual_summon(_rec(side, "monsters", int(e["zone"])), int(e["id"]))
+			elif bool(e.get("face_down", false)) or after_chain:
 				_appear(_rec(side, "monsters", int(e["zone"])))
 			else:
 				_placed(_rec(side, "monsters", int(e["zone"])))
@@ -596,6 +618,17 @@ func _event(e: Dictionary, events: Array, index: int, ctx: Dictionary) -> void:
 			_equip(e, events, index, ctx)
 		"discard":
 			_discard(int(e["id"]))
+
+
+## A ritual's monster, after the apply's impact: its full-card close-up (the card view with its ATK and DEF) swings in, then the monster
+## stands in its zone (the reference shows no beam for a ritual summon; the guardian star is asked once it stands).
+func _ritual_summon(record: int, id: int) -> void:
+	var view := func() -> void:
+		_close_up(_card_view(id), RITUAL_VIEW_DELAY, CLOSE_UP_TURN, RITUAL_VIEW_HOLD, CLOSE_UP_FADE)
+	_beat(view, RITUAL_VIEW_DELAY + CLOSE_UP_TURN + RITUAL_VIEW_HOLD + CLOSE_UP_FADE)
+	var stand := func() -> void:
+		_add(record)
+	_beat(stand, RITUAL_STAND_FRAMES)
 
 
 ## A card placed on the field: its light beam and screen flash (effect 1) at the placement's point (x 128, y the card's top + 30).
@@ -640,48 +673,135 @@ func _turn_card(record: int, delay: int) -> void:
 	_card(a, _rect(record), 20, delay, anim, b, 0.5, done)
 
 
+## The battle, as the reference shows it when the monsters are not 3D (frames from the confirm, the reference's pictures): the attacker
+## lunges on the field; the two battle card close-ups (140 x 196, the attacker on the left and the defender on the right) turn in and
+## stand; a white flash covers the picture; the result's burst and figure land on the card that loses life or is destroyed (the
+## attack's hit, effect 2); the card that is destroyed breaks up (the tile effect 3 over its close-up); the close-ups fade and the
+## field view comes back (BATTLE_VIEW_HOLD).
+const BATTLE_LUNGE_AT := 10
+const BATTLE_CARDS_AT := 44
+const BATTLE_FLASH_AT := 88
+const BATTLE_BURST_AT := 104
+const BATTLE_DESTROY_AT := 128
+const BATTLE_CLOSE_AT := 168
+const BATTLE_END_AT := 200
+const BATTLE_CARD_TURN := 16
+const BATTLE_CARD_RECTS := [Rect2(10, 22, 140, 196), Rect2(170, 22, 140, 196)]     # the attacker (left), the defender (right)
+const BATTLE_POINTS := [Vector2(80, 120), Vector2(240, 120)]                       # each card's point for the effects (the card + (70, 98))
+
+
 func _battle(e: Dictionary, ctx: Dictionary) -> void:
 	var side := int(ctx.get("side", 0))
 	var ra := _rec(side, "monsters", int(e["attacker"]))
 	var rt := _rec(1 - side, "monsters", int(e["target"]))
 	var r := int(e["result"])
+	var star := int(e.get("star", 0))
+	# which cards leave the field: a -1 result destroys both; a win destroys the defender; a loss destroys the attacker unless the
+	# defender is in defence position (then the attacker only loses life points)
+	var defender_leaves := r > 0 or r == -1
+	var attacker_leaves := r == -1 or (r < -1 and not bool(e.get("target_defense", false)))
+	var ids := [int(e.get("attacker_id", 0)), int(e.get("target_id", 0))]
 	var lunge := func() -> void:
 		if field != null:
 			field.lunge(ra, rt)              # the attacker moves toward the defender (the field's own lunge)
-	# the level gather (effect 14): the shown card's level, from the attacker, or the defender when the attacker lost
-	var shown_side := 1 - side if r < 0 else side
-	var shown_zone := int(e["target"]) if r < 0 else int(e["attacker"])
-	var shown_record := rt if r < 0 else ra
-	var gather := func() -> void:
-		_gather(shown_side, shown_zone, shown_record)
-	# the view: the battle's swing to the hand view starts about 10 frames after the attack is confirmed, and the field view comes back
-	# when the battle's presentation has played (the reference's swing: 16 frames out, held about 90 frames, 16 frames back)
-	_beat(func() -> void: pass, 10)
 	var swing := func() -> void:
 		battle_view = true
 		battle_view_t = 0
 		if field != null:
 			field.swing_out()
-	_beat(swing, 0)
-	_beat(gather, 0)
-	_beat(lunge, 16)
-	var clash := func() -> void:
+	var turned := func() -> void:
 		_turn_card(rt, 0)                # a defender still face-down is shown face-up when the battle reveals it
-		if not _hit(r):
-			var box := _rect(rt)
-			_flash(box, WHITE, 14, 0)
-			_rays(box.get_center(), 10, 4.0, 14.0, WHITE, 14, 0)
-	_beat(clash, 14)
-	var damage := func() -> void:       # the figure stays the port's own: the program's figure sits where the zero-height glyphs are (see docs/duel-effects.md, section 9)
-		if r > 0:
-			_figure(_rect(rt), r, RED, 0)
-		elif r < -1:
-			_figure(_rect(ra), -r, RED, 0)
-	_beat(damage, 34)
-	# the reveal's tile sparkle (effect 3) once the defender has turned: the card is read back from the picture
-	var tile := func() -> void:
-		_tile(rt)
-	_beat(tile, 0)
+	var cards := func() -> void:
+		_battle_cards(ids, attacker_leaves, defender_leaves)
+	var gather := func() -> void:
+		# the guardian star bonus: the star card's gather (effect 14), the attacker's point for a bonus to it, else the defender's
+		if star > 0:
+			_gather_card(ids[0], BATTLE_POINTS[0], 0)
+		else:
+			_gather_card(ids[1], BATTLE_POINTS[1], 1)
+	var burst := func() -> void:
+		_battle_burst(r, attacker_leaves, defender_leaves, bool(e.get("target_defense", false)))
+	var destroy := func() -> void:
+		_battle_destroy(ids, ra, rt, attacker_leaves, defender_leaves, e)
+	_beat(swing, BATTLE_LUNGE_AT)
+	_beat(lunge, BATTLE_CARDS_AT - BATTLE_LUNGE_AT)
+	_beat(cards, BATTLE_FLASH_AT - BATTLE_CARDS_AT)
+	_beat(_battle_flash, BATTLE_BURST_AT - BATTLE_FLASH_AT)
+	if star != 0:
+		_beat(gather, 0)
+	_beat(turned, 0)
+	_beat(burst, BATTLE_DESTROY_AT - BATTLE_BURST_AT)
+	_beat(destroy, BATTLE_CLOSE_AT - BATTLE_DESTROY_AT)
+	_beat(func() -> void: pass, BATTLE_END_AT - BATTLE_CLOSE_AT)
+
+
+## The two close-ups of the battle: each card's picture turns in over BATTLE_CARD_TURN frames and stands. A card that leaves is taken off
+## by its own tile effect at BATTLE_DESTROY_AT; the others fade out at BATTLE_CLOSE_AT.
+func _battle_cards(ids: Array, attacker_leaves: bool, defender_leaves: bool) -> void:
+	for i in 2:
+		var id := int(ids[i])
+		if id <= 0:
+			continue
+		var leaves := attacker_leaves if i == 0 else defender_leaves
+		var total := (BATTLE_DESTROY_AT - BATTLE_CARDS_AT) if leaves else (BATTLE_CLOSE_AT - BATTLE_CARDS_AT)
+		var anim := func(p: float) -> Dictionary:
+			var f := p * float(total)
+			var s := sin(clampf(f / float(BATTLE_CARD_TURN), 0.0, 1.0) * PI * 0.5)
+			var a := 1.0 if leaves else 1.0 - clampf((f - float(total - BATTLE_CARD_TURN)) / float(BATTLE_CARD_TURN), 0.0, 1.0)
+			return {"sx": maxf(s, 0.02), "alpha": a}
+		_card(_card_view(id), BATTLE_CARD_RECTS[i], total, 0, anim, null, 2.0, Callable())
+		ops.back()["held"] = true     # the close-up stays through the beats that follow (the beat's hold ends the beat)
+
+
+## The white flash over the picture: it rises and falls within 16 frames (between the cards and the burst).
+func _battle_flash() -> void:
+	var anim := func(p: float) -> Dictionary:
+		return {"alpha": sin(clampf(p, 0.0, 1.0) * PI)}
+	_op("flash", 16, 0, {"rect": PICTURE, "colour": WHITE, "anim": anim, "travel": Vector2.ZERO})
+
+
+## The burst and the figure of the battle's result: effect 2 at the point of the card that loses life (the defender for a win, the
+## attacker for a loss), the centre for a mutual destruction (number 0). A result of 0 has no figure.
+func _battle_burst(r: int, attacker_leaves: bool, defender_leaves: bool, target_defense: bool) -> void:
+	if r == 0:
+		return
+	var at := BATTLE_POINTS[1] if r > 0 else BATTLE_POINTS[0]
+	var number := r
+	if r == -1:
+		at = Vector2(160, 120)
+		number = 0
+	elif r > 0 and target_defense:
+		number = 0                  # a defence-position defender is destroyed without life points lost: the burst has no figure
+	_program(2, maxi(mini(absi(number) / 1000, 2) + 3, 0) if number != 0 else 6, {"x": int(at.x), "y": int(at.y), "number": number, "seed": number + 2})
+	if attacker_leaves or defender_leaves:
+		_rays(at, 10, 4.0, 14.0, WHITE, 14, 0)
+
+
+## The guardian star gather for the card (effect 14, variant the card's level less one) at its point.
+func _gather_card(id: int, point: Vector2, side_index: int) -> void:
+	if id <= 0 or host == null:
+		return
+	var level := int(host.engine.state.data.card(id).get("level", 1)) & 15
+	_program(14, maxi(level - 1, 0), {"x": int(point.x), "y": int(point.y), "seed": id + 14 + side_index})
+
+
+## The destruction of the battle's loser(s): effect 3 over the card's close-up (its picture as the battle shows it). A card in defence
+## position is drawn with the defence phase.
+func _battle_destroy(ids: Array, ra: int, rt: int, attacker_leaves: bool, defender_leaves: bool, e: Dictionary) -> void:
+	# the leaving cards are off the field from here (the destroyed events after the battle then find nothing to take off)
+	if attacker_leaves:
+		_drop(ra)
+		_tile_card(int(ids[0]), BATTLE_POINTS[0], bool(e.get("attacker_defense", false)))
+	if defender_leaves:
+		_drop(rt)
+		_tile_card(int(ids[1]), BATTLE_POINTS[1], bool(e.get("target_defense", false)))
+
+
+func _tile_card(id: int, point: Vector2, defence: bool) -> void:
+	if id <= 0 or host == null:
+		return
+	var sheet: Image = _card_view(id).get_image()
+	_program(3, 1 if defence else 0, {"x": int(point.x), "y": int(point.y), "sheet": sheet, "seed": id + 3})
 
 
 ## The ritual apply (effect 22): the tributes (the monsters the ritual's remove events name) are passed to the program, which moves and
@@ -697,10 +817,8 @@ func _ritual_tributes(events: Array, side: int) -> Array:
 func _ritual_start(card: int, events: Array, side: int) -> Callable:
 	var tributes := _ritual_tributes(events, side)
 	return func() -> void:
-		for record in tributes:
-			_unhide(record)         # the apply shows its tributes (they were taken off the picture with the window)
-		hand_hidden = true          # the hand stays off the picture through the apply
-		_program(22, card, {"x": 0, "y": 0, "z": 0, "seed": card + 22, "tributes": tributes, "side": side})
+		hand_hidden = true          # the hand stays off the picture through the apply (the tributes come back in its flight: effect 22)
+		_program(22, card, {"x": 0, "y": 0, "z": 0, "seed": card + 22, "tributes": tributes, "side": side, "release_at_impact": true})
 
 
 ## The removal order of the monster removal cards (effect 15's configuration index; the list is the port's, the overlay's table is the
@@ -753,29 +871,6 @@ func _card_variant(side: int, zone: int) -> int:
 ## The life point recovery's figure (effect 9) at the game's point (160, 120), the variant the table index of the amount (200 to 5000).
 func _recovery_figure(card: int) -> bool:
 	return _program(9, card - 338, {"x": 160, "y": 120, "seed": card + 9})
-
-
-## The battle's level gather (effect 14): the level of the card the battle shows (the defender's when the result is a loss for the
-## attacker), its variant the level less one, at the card's point plus (70, 98).
-func _gather(side: int, zone: int, record: int) -> bool:
-	var cell = host.engine.state.sides[side].monsters[zone] if host != null else null
-	if cell == null:
-		return false
-	var level := int(host.engine.state.data.card(int(cell["id"])).get("level", 1)) & 15
-	var box := _rect(record)
-	return _program(14, maxi(level - 1, 0), {"x": int(box.position.x) + 70, "y": int(box.position.y) + 98, "seed": record + 14})
-
-
-## The reveal's tile sparkle: effect 3 at the card's top-left plus (70, 98), with the card's read-back as its sheet. Phase 1 for a
-## card in defence position, else 0. False when the card is not shown or the program is not ported.
-func _tile(record: int) -> bool:
-	var entry := _entry_in(visible_entries, record)
-	if entry.is_empty():
-		return false
-	var phase := 1 if bool(entry.get("defense", false)) else 0
-	var box := _rect(record)
-	var sheet := _capture_card(record, entry.get("texture"))
-	return _program(3, phase, {"x": int(box.position.x) + 70, "y": int(box.position.y) + 98, "sheet": sheet, "seed": record + 3})
 
 
 ## The card read-back of effect 3 (the overlay's DuelCard_CaptureRoundedTexture): the card's picture as the screen shows it in its
@@ -1125,14 +1220,14 @@ func _window(card: int, side: int, also: Callable = Callable()) -> void:
 		# a ritual's start (effect 18, the flash) is with its window: the reference's start request is raised as the card is shown
 		if group == "ritual":
 			_group_effect(group, Rect2(CENTRE - WINDOW_SIZE / 2.0, WINDOW_SIZE), card, side)
-	_beat(window, WINDOW_FRAMES)
+		if also.is_valid():
+			# the apply starts while the card view fades: its portal fades in from RITUAL_APPLY_AT, so the portal is neutral and the
+			# flames show about 32 frames later (the reference's flames show at about +96). The window holds until the apply's impact.
+			_op("call", 1, RITUAL_APPLY_AT, {"done": also})
+	_beat(window, WINDOW_FRAMES, RITUAL_APPLY_BUDGET if also.is_valid() else BEAT_BUDGET)
 	var show := func() -> void:
 		hand_hidden = false
 	_beat(show, 0)
-	# a ritual's apply (effect 22) follows its window: the portal and the tributes come after the card view has gone (the reference's
-	# apply starts about 90 frames after the window's start)
-	if also.is_valid():
-		_beat(also, 0)
 	if group != "terrain" and group != "ritual":
 		var effect := func() -> void:
 			_group_effect(group, Rect2(CENTRE - WINDOW_SIZE / 2.0, WINDOW_SIZE), card, side)
@@ -1141,110 +1236,18 @@ func _window(card: int, side: int, also: Callable = Callable()) -> void:
 
 ## A card view at the centre: it swings in from edge-on over `turn` frames, holds `hold` frames, and fades over `fade` frames. It
 ## starts `delay` frames after the call. The view is the card's face at the window's size (the duel's own card picture).
-## The card's close-up texture: its frame (the card's kind), its picture and its name plate composed at 1x (140 x 196), as the
-## Password reveal composes the card. Cached per card; the field face is the fallback.
+## The card's close-up texture: the whole card at 1x (140 x 196), composed by CardView.card_picture as the card-detail routine composes
+## it (the Password reveal's card). Cached per card; the field face is the fallback.
 func _card_view(id: int) -> Texture2D:
 	if card_views.has(id):
 		return card_views[id]
-	var state = host.engine.state
-	var kind := "monster" if state.is_monster(id) else str(state.card_type(id)).to_lower()
-	if not kind in ["monster", "magic", "trap", "equip", "ritual"]:
-		kind = "magic"
-	var frame_path := CARD_FRAMES + "card_frame_%s_0.png" % kind
-	if not FileAccess.file_exists(frame_path):
-		frame_path = CARD_FRAMES + "card_frame_magic_0.png"
-	var base := Image.load_from_file(frame_path)
+	var data: Dictionary = host.engine.state.data.card(id)
+	var base := CardView.card_picture(id, data, int(data.get("attack", 0)), int(data.get("defense", 0)), card_ui_layout)
 	if base == null:
 		return _face(id)
-	base.convert(Image.FORMAT_RGBA8)
-	var art := Image.load_from_file(CARD_ART + "%03d.png" % id)
-	if art != null:
-		art.convert(Image.FORMAT_RGBA8)
-		base.blend_rect(art, Rect2i(Vector2i.ZERO, art.get_size()), CARD_VIEW_PICTURE_AT)
-	var plate := Image.load_from_file(NAMEPLATES + "%03d.png" % id)
-	if plate != null:
-		plate.convert(Image.FORMAT_RGBA8)
-		_subtract_plate(base, CardView.split_ink(plate)[1], CARD_VIEW_NAME_AT)
-	_blend_card_pieces(base, id)
 	var tex := ImageTexture.create_from_image(base)
 	card_views[id] = tex
 	return tex
-
-
-## The name plate's inks are drawn subtractively over the card's frame (PSX semi-transparency mode 2: the frame less the ink's colour;
-## the plate's index 0 is clear). `ink` holds an alpha of 1 where an ink is, its colour being what is taken away, so the letters come
-## out dark on the bar (the reference close-up's letters are black where the frame's green is lightest).
-func _subtract_plate(base: Image, ink: Image, at: Vector2i) -> void:
-	for y in ink.get_height():
-		for x in ink.get_width():
-			var taken := ink.get_pixel(x, y)
-			var q := at + Vector2i(x, y)
-			if taken.a <= 0.0 or q.x < 0 or q.y < 0 or q.x >= base.get_width() or q.y >= base.get_height():
-				continue
-			var under := base.get_pixel(q.x, q.y)
-			base.set_pixel(q.x, q.y, Color(maxf(under.r - taken.r, 0.0), maxf(under.g - taken.g, 0.0), maxf(under.b - taken.b, 0.0), under.a))
-
-
-## The card_ui pieces of the close-up, blended into the card's image at the reference close-up's places: the attribute (the spell
-## icon for a magic, equip or ritual card), the kind label (a monster's level stars, ATK and DEF instead). Each place is where the
-## piece's window starts; the layout's own offset is added (the same pieces the Password reveal composes).
-func _blend_card_pieces(base: Image, id: int) -> void:
-	var ui := _card_ui_layout()
-	var data: Dictionary = host.engine.state.data.card(id)
-	var type := str(data.get("type", ""))
-	if ["Magic", "Equip", "Trap", "Ritual"].has(type):
-		var label := "label_normal_magic"
-		if type == "Trap":
-			label = "label_trap"
-		elif type == "Equip":
-			label = "label_equip_magic"
-		_blend_piece(base, ui, label, CARD_VIEW_LABEL_AT)
-	else:
-		for i in clampi(int(data.get("level", 0)), 0, 12):
-			_blend_piece(base, ui, "level_star", CARD_VIEW_LEVEL_AT - Vector2i(9 * i, 0))
-		_blend_piece(base, ui, "label_atk", CARD_VIEW_ATK_AT)
-		_blend_digits(base, ui, int(data.get("attack", 0)), CARD_VIEW_ATK_AT + Vector2i(25, -1))
-		_blend_piece(base, ui, "label_def", CARD_VIEW_DEF_AT)
-		_blend_digits(base, ui, int(data.get("defense", 0)), CARD_VIEW_DEF_AT + Vector2i(25, -1))
-	var attribute := "attribute_" + str(data.get("attribute", "")).to_lower()
-	if ["Magic", "Equip", "Ritual"].has(type):
-		attribute = "attribute_spell"
-	elif type == "Trap":
-		attribute = "attribute_trap"
-	_blend_piece(base, ui, attribute, CARD_VIEW_ATTRIBUTE_AT)
-
-
-func _card_ui_layout() -> Dictionary:
-	if not card_ui_layout_loaded:
-		card_ui_layout_loaded = true
-		if FileAccess.file_exists(CARD_UI_LAYOUT):
-			var data = JSON.parse_string(FileAccess.get_file_as_string(CARD_UI_LAYOUT))
-			if typeof(data) == TYPE_DICTIONARY:
-				card_ui_layout = data
-	return card_ui_layout
-
-
-func _blend_piece(base: Image, ui: Dictionary, name: String, at: Vector2i) -> void:
-	if not ui.has(name):
-		return
-	var entry: Dictionary = ui[name]
-	var piece := Image.load_from_file(CARD_UI + str(entry["file"]))
-	if piece == null:
-		return
-	piece.convert(Image.FORMAT_RGBA8)
-	var at_piece := at + Vector2i(int(entry["x"]), int(entry["y"]))
-	# the opaque texels are laid over the frame, the inks (the name plate's ramp) taken away from it
-	var parts: Array = CardView.split_ink(piece)
-	base.blend_rect(parts[0], Rect2i(Vector2i.ZERO, piece.get_size()), at_piece)
-	_subtract_plate(base, parts[1], at_piece)
-
-
-## A stat as four digit cells right-aligned on the value's place (the leading cells are blank), six pixels apart.
-func _blend_digits(base: Image, ui: Dictionary, value: int, at: Vector2i) -> void:
-	var string := str(clampi(value, 0, 9999)).lpad(4, " ")
-	for i in string.length():
-		if string[i] != " ":
-			_blend_piece(base, ui, "digit_" + string[i], at + Vector2i(i * 6, 0))
 
 
 func _close_up(tex: Texture2D, delay: int, turn: int, hold: int, fade: int) -> void:

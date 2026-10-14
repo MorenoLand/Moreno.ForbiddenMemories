@@ -36,6 +36,17 @@ const DEF_AT := Vector2(72, 170)          # the DEF label; its digits from (97, 
 const LEVEL_AT := Vector2(119, 32)        # the level stars, the first at the right and each nine pixels left of the last
 const DIGIT_ADVANCE := 6
 const SYMBOLS := {" ": 0, "<": 84, ">": 81, "/": 68, ".": 11, "'": 27, ",": 31, "-": 48, "#": 60, "&": 67}   # the font's symbol glyphs
+# The whole card at 1x (140 x 196), composed by card_picture: the frames of each kind (their first frame), the pictures and the name plates.
+const CARD_FRAMES := "res://assets/screens/password/"
+const CARD_ART := "res://assets/images/card_art/"
+const NAMEPLATES := "res://assets/images/nameplate/"
+const CARD_PICTURE_AT := Vector2i(19, 50)      # the picture's place in the card (the card-detail routine's offset)
+const CARD_NAME_AT := Vector2i(12, 14)         # the name plate
+const CARD_ATTRIBUTE_AT := Vector2i(110, 13)   # the attribute ball, right of the name plate
+const CARD_LABEL_AT := Vector2i(71, 33)        # a spell's, trap's or ritual's kind label, under the name plate
+const CARD_LEVEL_AT := Vector2i(119, 32)       # a monster's level stars, the first at the right, nine pixels left each
+const CARD_ATK_AT := Vector2i(72, 158)         # a monster's ATK label (its digits from +25 on the same row)
+const CARD_DEF_AT := Vector2i(72, 170)
 
 var text                       # the GameText engine (strings, glyphs and the font's ramps), loaded
 var sharp: Material            # the screen's sharpening material for the pieces and text
@@ -65,10 +76,12 @@ func _init(game_text, material: Material) -> void:
 
 
 ## The card's box: the text at its layer `text_layer` (positioned at the box's top-left by the caller) and the stats, level and
-## attribute pieces at `icon_layer`. Both are cleared first. `data` is the card's record (cards.json).
-func build(text_layer: Node2D, icon_layer: Node2D, id: int, data: Dictionary) -> void:
+## attribute pieces at `icon_layer`. Both are cleared first. `data` is the card's record (cards.json). With `with_pieces` false only the
+## text is built (the duel's viewer: its stats, level and attribute are on the card's picture, card_picture, not in the box).
+func build(text_layer: Node2D, icon_layer: Node2D, id: int, data: Dictionary, with_pieces := true) -> void:
 	_clear(text_layer)
-	_clear(icon_layer)
+	if icon_layer != null:
+		_clear(icon_layer)
 	_parent = text_layer
 	_icons = icon_layer
 	_id = id
@@ -79,6 +92,8 @@ func build(text_layer: Node2D, icon_layer: Node2D, id: int, data: Dictionary) ->
 	_stars = [STARS.get(str(data.get("guardian_star_1", "")), 0), STARS.get(str(data.get("guardian_star_2", "")), 0)]
 	_pen = Vector2.ZERO
 	_run(text.string_bytes(LAYOUT_OTHER if special else LAYOUT_MONSTER), 0)
+	if not with_pieces:
+		return
 	if not special:
 		_piece_at("label_atk", ATK_AT)
 		_digits(int(data.get("attack", 0)), ATK_AT + Vector2(25, -1))
@@ -276,3 +291,109 @@ func bytes_of(string: String) -> Array:
 			sjis = 0x824F + code - 48
 		out.append(glyph_codes.get(sjis, 0))
 	return out
+
+
+## The card_ui pieces' layout (layout.json), read once by the caller and passed to card_picture.
+static func load_ui() -> Dictionary:
+	if not FileAccess.file_exists(CARD_UI + "layout.json"):
+		return {}
+	var parsed = JSON.parse_string(FileAccess.get_file_as_string(CARD_UI + "layout.json"))
+	return parsed if typeof(parsed) == TYPE_DICTIONARY else {}
+
+
+## The frame kind of a card type: Magic, Trap, Equip and Ritual have frames of their own, and every other type is a monster.
+static func frame_kind(type: String) -> String:
+	match type:
+		"Magic", "":
+			return "magic"
+		"Trap":
+			return "trap"
+		"Equip":
+			return "equip"
+		"Ritual":
+			return "ritual"
+	return "monster"
+
+
+## The whole card at 1x (140 x 196), composed as the game's card-detail routine composes it (the duel's viewer and close-up, the
+## Password reveal): the frame of the card's kind (its first frame), the picture, the name plate's ink taken off the frame, the kind
+## label (a spell, trap, ritual or equip) or a monster's level stars, ATK and DEF (the values `atk` and `dfn` show), and the attribute
+## ball. `ui` is load_ui(). Null when the frame is missing.
+static func card_picture(id: int, data: Dictionary, atk: int, dfn: int, ui: Dictionary) -> Image:
+	var base := Image.load_from_file(CARD_FRAMES + "card_frame_%s_0.png" % frame_kind(str(data.get("type", ""))))
+	if base == null:
+		return null
+	base.convert(Image.FORMAT_RGBA8)
+	var art := Image.load_from_file(CARD_ART + "%03d.png" % id)
+	if art != null:
+		art.convert(Image.FORMAT_RGBA8)
+		base.blend_rect(art, Rect2i(Vector2i.ZERO, art.get_size()), CARD_PICTURE_AT)
+	var plate := Image.load_from_file(NAMEPLATES + "%03d.png" % id)
+	if plate != null:
+		plate.convert(Image.FORMAT_RGBA8)
+		subtract_ink(base, split_ink(plate)[1], CARD_NAME_AT)
+	_compose_pieces(base, ui, data, atk, dfn)
+	return base
+
+
+## The name plate's inks are drawn subtractively over the card's frame (PSX semi-transparency mode 2: the frame less the ink's colour;
+## the plate's index 0 is clear). `ink` holds an alpha of 1 where an ink is, its colour being what is taken away, so the letters come
+## out dark on the bar (the reference close-up's letters are black where the frame's green is lightest).
+static func subtract_ink(base: Image, ink: Image, at: Vector2i) -> void:
+	for y in ink.get_height():
+		for x in ink.get_width():
+			var taken := ink.get_pixel(x, y)
+			var q := at + Vector2i(x, y)
+			if taken.a <= 0.0 or q.x < 0 or q.y < 0 or q.x >= base.get_width() or q.y >= base.get_height():
+				continue
+			var under := base.get_pixel(q.x, q.y)
+			base.set_pixel(q.x, q.y, Color(maxf(under.r - taken.r, 0.0), maxf(under.g - taken.g, 0.0), maxf(under.b - taken.b, 0.0), under.a))
+
+
+## The card_ui pieces of the card picture, blended at the reference's places (see the constants above; each piece's own layout offset is
+## added).
+static func _compose_pieces(base: Image, ui: Dictionary, data: Dictionary, atk: int, dfn: int) -> void:
+	var type := str(data.get("type", ""))
+	if SPECIAL_TYPES.has(type):
+		var label := "label_normal_magic"
+		if type == "Trap":
+			label = "label_trap"
+		elif type == "Equip":
+			label = "label_equip_magic"
+		_compose_piece(base, ui, label, CARD_LABEL_AT)
+	else:
+		for i in clampi(int(data.get("level", 0)), 0, 12):
+			_compose_piece(base, ui, "level_star", CARD_LEVEL_AT - Vector2i(9 * i, 0))
+		_compose_piece(base, ui, "label_atk", CARD_ATK_AT)
+		_compose_digits(base, ui, atk, CARD_ATK_AT + Vector2i(25, -1))
+		_compose_piece(base, ui, "label_def", CARD_DEF_AT)
+		_compose_digits(base, ui, dfn, CARD_DEF_AT + Vector2i(25, -1))
+	var attribute := "attribute_" + str(data.get("attribute", "")).to_lower()
+	if ["Magic", "Equip", "Ritual"].has(type):
+		attribute = "attribute_spell"
+	elif type == "Trap":
+		attribute = "attribute_trap"
+	_compose_piece(base, ui, attribute, CARD_ATTRIBUTE_AT)
+
+
+static func _compose_piece(base: Image, ui: Dictionary, name: String, at: Vector2i) -> void:
+	if not ui.has(name):
+		return
+	var entry: Dictionary = ui[name]
+	var piece := Image.load_from_file(CARD_UI + str(entry["file"]))
+	if piece == null:
+		return
+	piece.convert(Image.FORMAT_RGBA8)
+	var at_piece := at + Vector2i(int(entry["x"]), int(entry["y"]))
+	# the opaque texels are laid over the frame, the inks (the name plate's ramp) taken away from it
+	var parts: Array = split_ink(piece)
+	base.blend_rect(parts[0], Rect2i(Vector2i.ZERO, piece.get_size()), at_piece)
+	subtract_ink(base, parts[1], at_piece)
+
+
+## A stat as four digit cells right-aligned on the value's place (the leading cells are blank), six pixels apart.
+static func _compose_digits(base: Image, ui: Dictionary, value: int, at: Vector2i) -> void:
+	var string := str(clampi(value, 0, 9999)).lpad(4, " ")
+	for i in string.length():
+		if string[i] != " ":
+			_compose_piece(base, ui, "digit_" + string[i], at + Vector2i(i * 6, 0))

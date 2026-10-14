@@ -223,13 +223,15 @@ func _shader(cards_too: bool) -> String:
 	var fog_k := _fog_constants(650, 800, int(layout["projection"]))
 	var code := "shader_type spatial;\nrender_mode unshaded, cull_disabled;\nuniform sampler2D albedo_texture : filter_nearest;\n"
 	code += "varying float fog;\n"
+	# the console's 4 x 4 ordered dither, indexed by the screen pixel's row and column (modulo 4)
+	code += "const float DITHER[16] = float[16](-4.0, 0.0, -3.0, 1.0, 2.0, -2.0, 3.0, -1.0, -3.0, 1.0, -4.0, 0.0, 3.0, -1.0, 2.0, -2.0);\n"
 	code += "const float H = %d.0;\nconst float DQA = %d.0;\nconst float DQB = %d.0;\n" % [int(layout["projection"]), fog_k.x, fog_k.y]
 	code += "void vertex() {\n\tfloat sz = max(-(MODELVIEW_MATRIX * vec4(VERTEX, 1.0)).z, 1.0);\n"
 	code += "\tfloat mac0 = (H * 65536.0 / sz) * DQA + DQB;\n\tfog = clamp(mac0 / 4096.0, 0.0, 4096.0) / 4096.0;\n}\n"
 	code += "void fragment() {\n\tvec4 c = texture(albedo_texture, UV);\n"
 	var tint := ""
 	if not cards_too:
-		code = code.replace("uniform sampler2D albedo_texture : filter_nearest;\n", "uniform sampler2D albedo_texture : filter_nearest;\nuniform vec4 board_tint : source_color = vec4(1.0);\n")
+		code = code.replace("uniform sampler2D albedo_texture : filter_nearest;\n", "uniform sampler2D albedo_texture : filter_nearest;\nuniform vec4 board_tint : source_color = vec4(1.0);\nuniform float dither_px = 1.0;\n")
 		tint = " * board_tint.rgb"
 	if cards_too:
 		code = code.replace("uniform sampler2D albedo_texture : filter_nearest;\n", "uniform sampler2D albedo_texture : filter_nearest;\nuniform vec4 flip_tint : source_color = vec4(1.0);\n")
@@ -237,7 +239,18 @@ func _shader(cards_too: bool) -> String:
 		tint = " * flip_tint.rgb"      # the flip's colour pulse (a card turning over, see _animate)
 	# the board is not depth-cued in the reference frame (its far rows stay bright, measured on the real 2P screen): only the cards take the fog
 	# the board's colour is stored halved (see _build_board): doubled here; the cards' own colour is white and stays as it is
-	code += "\tALBEDO = c.rgb * COLOR.rgb" + ("" if cards_too else " * 2.0") + tint + " * (1.0 - fog);\n}\n"
+	if cards_too:
+		code += "\tALBEDO = c.rgb * COLOR.rgb" + tint + " * (1.0 - fog);\n}\n"
+	else:
+		# the board is drawn the way the console draws a dithered textured polygon: the texel (8 bits) times the lit factor
+		# (COLOR * 2, times the board tint), truncated; the 4 x 4 ordered dither added at the screen pixel (FRAGCOORD); the sum
+		# clamped and cut to five bits a channel. Every textured board polygon of the reference has its dither on.
+		code += "\tvec3 t8 = floor(c.rgb * 255.0 + 0.5);\n"
+		code += "\tvec3 f8 = floor(t8 * COLOR.rgb * 2.0" + tint + ");\n"
+		# the pixel of the 320 x 240 picture (the field viewport is view_scale times that size: dither_px is the scale)
+		code += "\tfloat dd = DITHER[(int(mod(floor(FRAGCOORD.y / dither_px), 4.0)) * 4) + int(mod(floor(FRAGCOORD.x / dither_px), 4.0))];\n"
+		code += "\tvec3 q = floor(clamp(f8 + vec3(dd), 0.0, 255.0) / 8.0) * 8.0;\n"
+		code += "\tALBEDO = q / 255.0 * (1.0 - fog);\n}\n"
 	return code
 
 
@@ -482,6 +495,8 @@ func set_view_scale(k: int) -> void:
 	view_scale = k
 	viewport.size = Vector2i(320 * k, VIEW_HEIGHT * k)
 	screen.scale = Vector2(1.0 / k, 1.0 / k)
+	for material in board_materials:
+		(material as ShaderMaterial).set_shader_parameter("dither_px", float(k))
 
 
 ## The screen box of a card on its slot, as the box of its four corners at the height a card on the field hangs at.
@@ -496,6 +511,13 @@ func card_box(record: int) -> Rect2:
 		low = low.min(p)
 		high = high.max(p)
 	return Rect2(low, high - low)
+
+
+## The board's picture and the field plate shown or hidden: the card viewer's screen is black, with neither (duel_scene.gd _draw_panel).
+func set_shown(on: bool) -> void:
+	screen.visible = on
+	if plate != null:
+		plate.visible = on
 
 
 ## Updates the cards on the board. Each entry: {record, texture, back (Texture2D), face_down, defense, foe}. A card whose entry is
@@ -615,7 +637,8 @@ func _place_sprites() -> void:
 		sprite.texture = texture
 		var size := texture.get_size()
 		sprite.scale = Vector2(view_scale * FLAT_SIZE.x / size.x, view_scale * FLAT_SIZE.y / size.y)
-		sprite.position = camera.unproject_position(_godot(grid_position(record))).round()
+		# the flat sprite sits FLAT_OFFSET_Y above the centred cell, as _flat_box puts its box (the reference's sprite top is 54 on cell 53..113)
+		sprite.position = camera.unproject_position(_godot(grid_position(record))).round() + Vector2(0.0, FLAT_OFFSET_Y * view_scale)
 		var tint := Color(1.0, 1.0, 1.0)
 		var material: ShaderMaterial = (node.mesh as ArrayMesh).surface_get_material(0)
 		var pulse = material.get_shader_parameter("flip_tint") if material != null else null
@@ -810,6 +833,7 @@ func _build_board(folder: String) -> bool:
 		var material := ShaderMaterial.new()
 		material.shader = shader_board
 		material.set_shader_parameter("board_tint", Color(board_tint.x / 128.0, board_tint.y / 128.0, board_tint.z / 128.0))
+		material.set_shader_parameter("dither_px", float(view_scale))
 		board_materials.append(material)
 		var image := Image.load_from_file(folder + "texture_%d.png" % i)
 		if image != null:

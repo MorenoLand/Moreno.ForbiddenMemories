@@ -36,6 +36,7 @@ const GameState := preload("res://scripts/state/game_state.gd")
 
 const FRAME_BUDGET := 60000        # physics frames a duel may run before it is cut off (the stalemate limit; the computer's dwells lengthen a duel)
 const MODE_STALL := 600            # frames a mode may hold with no effect busy
+const NUDGE_FRAMES := 240          # after a stall in field or hand, Enter (end turn) is pressed; the duel must move on within this many frames
 const FOE_STALL := 1500            # frames the computer's turn may hold with nothing busy (its dwells between actions, duel_scene.gd FOE_*)
 const BUSY_STALL := 600            # frames an effect may stay busy
 const OVER_STALL := 1500           # frames the ending may take before its result screen
@@ -63,6 +64,7 @@ var press_frames := PRESS_FRAMES_DEFAULT
 var held_keys: Array = []          # [key, release frame, read] (read: the scene's Input saw the key down)
 var probe: Dictionary = {}          # the last press: {mode, key, fingerprint, frame, busy}
 var recent_keys: Array = []         # the last eight presses, "mode:key", for the stall notes
+var nudge: Dictionary = {}          # a stall in field or hand: the Enter press that tests it (see the mode check in _observe)
 var finished_flag := false
 var finished_info: Dictionary = {}
 var presses: Dictionary = {}        # "mode|key" -> [presses, changes]
@@ -192,6 +194,7 @@ func _start(scenario: Dictionary) -> void:
 	finished_flag = false
 	finished_info = {}
 	probe = {}
+	nudge = {}
 	held_keys.clear()
 	cooldown = 0
 	print("SOAK  start %s" % cur["name"])
@@ -415,6 +418,22 @@ func _observe() -> void:
 					str(duel.set_down), duel.marks.size(), str(recent_keys)]
 					+ " [Q down %s, cancel edge held %s, help open %s, keys lost %d, hand index %d]" % [
 						str(Input.is_key_pressed(KEY_Q)), str(duel.held.get("cancel", false)), str(duel.help.overlay != null), int(cur.get("keys_lost", 0)), duel.hand_index])
+			if (mode == "field" or mode == "hand") and nudge.is_empty() and not busy:
+				# a random walk can go a long time without Enter (end turn): Enter is pressed now, and the stall stands only if the duel
+				# does not move on within NUDGE_FRAMES
+				nudge = {"frame": frame, "mode": mode, "turn": engine.state.turn_side, "stall": cur["stalls"].size() - 1}
+				_press(KEY_ENTER)
+	if not nudge.is_empty():
+		if mode != str(nudge["mode"]) or engine.state.turn_side != int(nudge["turn"]):
+			# the duel moved on: the stall was the driver's keys, not a stuck scene
+			print("SOAK  NUDGE %s: Enter moved the duel on %d frames after the stall (driver starvation, not a stall)" % [
+					cur["name"], frame - int(nudge["frame"])])
+			cur["stalls"].remove_at(int(nudge["stall"]))
+			cur["nudged"] = int(cur.get("nudged", 0)) + 1
+			nudge = {}
+		elif frame - int(nudge["frame"]) >= NUDGE_FRAMES:
+			print("SOAK  STALL confirmed %s: Enter did not move the %s on in %d frames" % [cur["name"], mode, NUDGE_FRAMES])
+			nudge = {}
 	# an effect that stays busy too long: the count is of one sequence (a foe's next action starts in the frame the last one ends, so
 	# busy never reads false between them)
 	var finishes: int = duel.fx.finishes_total

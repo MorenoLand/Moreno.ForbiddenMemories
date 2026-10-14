@@ -219,8 +219,10 @@ overlay and are counted with their ids.
 ## 6. Triggers in the duel
 
 The game's request calls (the card effect steps, the battle, the ritual, the coordinators) are the triggers. The port's hooks in `duel_fx.gd`:
-- `_battle` (the clash beat): calls `_hit(result)` (program 2), with `number = result` and the variant `3 + min(result / 1000, 2)`, clamped at 0.
-  The port's own damage figure beat is kept (see section 9 for why).
+- `_battle` (the battle, when the monsters show as the two card close-ups): the burst is program 2 (`_battle_burst`) at the card that
+  loses life (the defender for a win, the attacker for a loss, the centre for a mutual destruction) with `number = result` and the
+  variant `3 + min(|result| / 1000, 2)`; a defence-position defender destroyed by a win takes the zero variant (6) with no figure. The
+  card that leaves is taken off by program 3 over its close-up (`_battle_destroy`, phase 1 in defence position).
 - The window's group effect for the reveal group (Dark Piercing Light, cards 348 and 350): program 19 at (160, 104).
 - `_trap` (the spring beat of a trap): program 8 at variant 0, at the trap's point (a scene program: its offset is the point less (160, 108)).
 - `_window_program` (the magic window, before the group's stand-in): "sweep" runs program 16 at variant 0 (the window's centre); "stop"
@@ -238,11 +240,16 @@ The game's request calls (the card effect steps, the battle, the ritual, the coo
 
 - Card-object triggers (the channel of duel_fx.gd, `CardObjects`): the magic window's feather (card 672) runs program 23 over the opponent's
   magic and trap row (its direction is the row's side); the window's "board" group (Dark Hole, 336) runs program 17 over every card on
-  the board; a ritual event with a summon (`_ritual_apply`) runs program 22 with the removed tributes before the summon; a monster
+  the board; a ritual event with a summon runs program 22 with the removed tributes, started about 64 frames into the magic window (`_window`:
+  the portal is neutral and the flames show at about +96) and holding the sequence until its impact; the tributes are hidden with the
+  window and come back when their flight starts (effect 22's stage 0). The apply's geometry uses the duel's field view (effect_22.gd
+  `field_view`, measured from the reference's geometry at the apply: the portal's quads at (194,110)-(231,141) and (88,110)-(126,141)).
+  The ritual monster's close-up (`_ritual_summon`) follows the impact by 24 frames, then the monster stands in its zone and its guardian
+  star is asked (duel_scene `_resolve_held`); a monster
   removal (the removal cards 653 to 664 and Crush Card 661, `_removal`) runs program 15 at the removed monsters' points, then program 11
   at each one (its variant the card type); the heal window (a recovery card, 338 to 342) runs program 9 at (160, 120), variant the
-  amount index; the battle beat before the lunge (`_gather`) runs program 14 with the shown card's level less one.
-- The reveal's tile sparkle (effect 3) runs after the battle's damage beat, with the defender's read-back as its sheet (section 9).
+  amount index; a battle with a guardian star bonus (the event's `star`) runs program 14 (`_gather_card`) with the star card's level less one.
+- The destroyed card's tile effect (effect 3) runs at the battle's destruction beat, with the card's close-up as its sheet (`_tile_card`).
 
 Hook sites not yet taken: fusion and equip (not yet mapped to ids); Exodia (0, 19, 24); the magic window's ritual group is
 hooked (18 at the window, 22 at the summon). Program 14 and 15 and 11 are hooked; their live timings are unverified.

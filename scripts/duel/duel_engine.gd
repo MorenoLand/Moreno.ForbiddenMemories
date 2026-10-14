@@ -499,7 +499,10 @@ func attack(p: int, zone_index: int, target := -1) -> Array:
 		r = 0
 	else:
 		r = -1
-	events.append({"kind": "battle", "attacker": zone_index, "target": target, "result": r})
+	# the ids, the guardian star bonus and the positions let the presentation show the battle after the state has changed
+	events.append({"kind": "battle", "attacker": zone_index, "target": target, "result": r, "attacker_id": int(attacker["id"]),
+		"target_id": int(defender["id"]), "star": bonus, "attacker_defense": bool(attacker["defense"]),
+		"target_defense": bool(defender["defense"])})
 	if r > 0:
 		foe.monsters[target] = null
 		events.append({"kind": "destroyed", "side": p ^ 1, "zone": target})

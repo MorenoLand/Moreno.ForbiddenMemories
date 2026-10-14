@@ -1,5 +1,6 @@
 extends SceneTree
-## Scripted duel presentation capture (magic, equip, trap, fusion) for comparing with the reference picture series. The
+## Scripted duel presentation capture (magic, equip, trap, fusion, ritual, faceup, battle_a to battle_g) for comparing with the reference picture series.
+## The battle_* scenarios put the monsters on the field (BATTLES) and attack (or let the CPU attack, battle_g) from its start. The
 ## player's hand is set to the cards the scenario plays; the picture is saved every EVERY physics frames (320 x 240) with a
 ## log line of the duel's state. Run it minimized and silent:
 ##   G:\Software\Redot\redot.windows.editor.x86_64.exe --position -32000,-32000 --resolution 640x480 --minimized --audio-driver Dummy --path G:\Development\Godot\Projects\ForbiddenMemories -s res://tests/duel_presentation_capture.gd -- --scen=magic --out=C:\path\to\folder
@@ -19,6 +20,8 @@ var log_file: FileAccess
 var t := 0
 var done := false
 var swapped := false
+var star_settle := 0
+const DEBUG_FX := false
 
 const SCENES := {
 	"magic": {"deck": [5, 330, 4, 6, 7, 8, 9, 10], "hand": [5, 330, 4, 6, 7]},
@@ -26,6 +29,30 @@ const SCENES := {
 	"trap": {"deck": [5, 681, 4, 6, 7, 8, 9, 10], "hand": [5, 681, 4, 6, 7]},
 	"fusion": {"deck": [2, 8, 5, 6, 7, 9, 10, 11], "hand": [2, 8, 5, 6, 7]},
 	"ritual": {"deck": [1, 1, 1, 675, 5, 6, 7, 8, 9, 10], "hand": [1, 1, 1, 675, 5]},
+	"faceup": {"deck": [4, 315, 5, 6, 7, 8, 9, 10], "hand": [4, 315, 5, 6, 7]},
+	"hand_magic": {"deck": [5, 330, 4, 6, 7, 8, 9, 10], "hand": [5, 330, 4, 6, 7]},
+	"hand_equip": {"deck": [4, 315, 5, 6, 7, 8, 9, 10], "hand": [4, 315, 5, 6, 7]},
+	"hand_trap": {"deck": [5, 681, 4, 6, 7, 8, 9, 10], "hand": [5, 681, 4, 6, 7]},
+	"battle_a": {"deck": [1, 428, 5, 6, 7, 8, 9, 10], "hand": [5, 6, 7, 8, 9]},
+	"battle_b": {"deck": [123, 192, 5, 6, 7, 8, 9, 10], "hand": [5, 6, 7, 8, 9]},
+	"battle_c": {"deck": [123, 428, 5, 6, 7, 8, 9, 10], "hand": [5, 6, 7, 8, 9]},
+	"battle_d1": {"deck": [1, 428, 5, 6, 7, 8, 9, 10], "hand": [5, 6, 7, 8, 9]},
+	"battle_d2": {"deck": [123, 428, 5, 6, 7, 8, 9, 10], "hand": [5, 6, 7, 8, 9]},
+	"battle_e": {"deck": [1, 428, 5, 6, 7, 8, 9, 10], "hand": [5, 6, 7, 8, 9]},
+	"battle_f": {"deck": [1, 5, 6, 7, 8, 9, 10, 11], "hand": [5, 6, 7, 8, 9]},
+	"battle_g": {"deck": [428, 5, 6, 7, 8, 9, 10, 11], "hand": [5, 6, 7, 8, 9]},
+}
+# battle scenarios: the monsters are set on the field before the attack (the reference's cases: its player's monster and the CPU's
+# monster, by card id; "fu"/"fd" face up or down, "atk"/"def" position). Attacker zone a, target zone t (-1: a direct attack).
+const BATTLES := {
+	"battle_a": {"mine": [[1, "fu", "atk"]], "foe": [[428, "fu", "atk"]], "a": 0, "t": 0},
+	"battle_b": {"mine": [[123, "fu", "atk"]], "foe": [[192, "fu", "atk"]], "a": 0, "t": 0},
+	"battle_c": {"mine": [[123, "fu", "atk"]], "foe": [[428, "fu", "atk"]], "a": 0, "t": 0},
+	"battle_d1": {"mine": [[1, "fu", "atk"]], "foe": [[428, "fu", "def"]], "a": 0, "t": 0},
+	"battle_d2": {"mine": [[123, "fu", "atk"]], "foe": [[428, "fu", "def"]], "a": 0, "t": 0},
+	"battle_e": {"mine": [[1, "fu", "atk"]], "foe": [[428, "fd", "def"]], "a": 0, "t": 0},
+	"battle_f": {"mine": [[1, "fu", "atk"], [123, "fu", "atk"]], "foe": [], "a": 1, "t": -1},
+	"battle_g": {"mine": [], "foe": [[428, "fu", "atk"]], "a": 0, "t": -1, "foe_attacks": true},
 }
 
 
@@ -70,13 +97,17 @@ func _hand_index_of(card: int) -> int:
 func _script() -> Array:
 	# ops: ["wait", n] / ["until_hand"] / ["key", keycode] (3 frames down, 3 up) / ["cap", bool] / ["call", name]
 	var s: Array = [["cap", true], ["until_hand"]]
+	if BATTLES.has(scen):
+		# the field is set up, then the battle (or the CPU's attack) is pictured from its start to the field's return
+		s = [["cap", false], ["until_hand"], ["call", "setup_battle"], ["wait", 30], ["call", "battle"], ["wait", 480], ["cap", false]]
+		return s
 	match scen:
 		"magic":
 			s += [["move_to", 330], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E], ["wait", 400]]
 		"equip":
 			# the monster first (the reference plays it and ends the turn), then the equip on it
 			s += [["cap", false], ["move_to", 4], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D],
-				["wait", 3], ["key", KEY_E], ["until_mode", "dest"], ["key", KEY_E], ["wait", 4], ["if_star_confirm"], ["if_star_confirm"], ["until_idle"], ["cap", false], ["end_turn"], ["until_hand"], ["wait", 30],
+				["wait", 3], ["key", KEY_E], ["until_mode", "dest"], ["key", KEY_E], ["wait", 4], ["star_press"], ["until_idle"], ["cap", false], ["end_turn"], ["until_hand"], ["wait", 30],
 				["cap", true], ["move_to", 315], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E], ["until_mode", "equip_pick"], ["wait", 20], ["key", KEY_E], ["wait", 30], ["until_idle"], ["wait", 20], ["key", KEY_W], ["wait", 10], ["key", KEY_E], ["wait", 20], ["key", KEY_E], ["wait", 10], ["key", KEY_E], ["until_idle"], ["wait", 300]]
 		"trap":
 			s += [["move_to", 681], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_E], ["until_mode", "dest"], ["key", KEY_E], ["until_idle"], ["wait", 30],
@@ -86,9 +117,17 @@ func _script() -> Array:
 			# does not go back to the hand), then the ritual from the hand on the next turn
 			for tribute in [1, 1, 1]:
 				s += [["move_to", tribute], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E],
-					["until_mode", "dest"], ["key", KEY_E], ["wait", 4], ["if_star_confirm"], ["if_star_confirm"], ["until_idle"],
+					["until_mode", "dest"], ["key", KEY_E], ["wait", 4], ["star_press"], ["until_idle"],
 					["end_turn"], ["until_hand"], ["wait", 30]]   # one placement a turn: the field phase after it does not go back to the hand
-			s += [["cap", true], ["move_to", 675], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E], ["wait", 1000]]
+			s += [["cap", true], ["move_to", 675], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E],
+				["star_press"], ["until_idle"], ["wait", 400]]   # the summoned monster's guardian star is asked
+		"hand_magic", "hand_equip", "hand_trap":
+			# the first hand phase with the card art loaded (400 frames after the deal): the picture of the hand only
+			s += [["cap", false], ["until_hand"], ["wait", 400], ["cap", true], ["wait", 8], ["cap", false]]
+		"faceup":
+			# the monster face up at the first zone (right, cross, cross as the reference plays it), then the settled picture
+			s += [["cap", false], ["move_to", 4], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E],
+				["until_mode", "dest"], ["key", KEY_E], ["wait", 4], ["star_press"], ["until_idle"], ["wait", 400], ["cap", true], ["wait", 16], ["cap", false]]
 		"fusion":
 			s += [["move_to", 2], ["key", KEY_F], ["wait", 6], ["move_to", 8], ["key", KEY_F], ["wait", 6], ["key", KEY_E],
 				["wait", 20], ["key", KEY_E], ["wait", 40], ["key", KEY_E], ["wait", 40], ["key", KEY_E], ["wait", 360]]
@@ -112,14 +151,30 @@ func _snap() -> void:
 	var f0: Array = []
 	for z in s.sides[0].monsters:
 		f0.append(z["id"] if z != null else null)
+	var f1: Array = []
+	for z in s.sides[1].monsters:
+		f1.append(z["id"] if z != null else null)
 	var f0s: Array = []
 	for z in s.sides[0].traps:
 		f0s.append(z["id"] if z != null else null)
 	var f1s: Array = []
 	for z in s.sides[1].traps:
 		f1s.append(z["id"] if z != null else null)
-	_log("%s pf=%d mode=%s timer=%d busy=%s turn=%d hand=%s m0=%s s0=%s s1=%s lp=%d,%d" % [name, pf, duel.mode, duel.timer, str(_busy()),
-		s.turn_side, str(hand), str(f0), str(f0s), str(f1s), s.sides[0].lp, s.sides[1].lp])
+	_log("%s pf=%d mode=%s timer=%d busy=%s turn=%d hand=%s m0=%s s0=%s s1=%s lp=%d,%d star=%d m1=%s" % [name, pf, duel.mode, duel.timer, str(_busy()),
+		s.turn_side, str(hand), str(f0), str(f0s), str(f1s), s.sides[0].lp, s.sides[1].lp, duel.star_zone, str(f1)])
+	if DEBUG_FX:
+		_log("  fx %s" % duel.fx.debug_state())
+		for entry in duel.fx.programs:
+			var cv = entry["canvas"]
+			var lay := []
+			for l in cv._layers:
+				lay.append("%d/%s/%s" % [l.records.size(), str(l.visible), str(l.global_position)])
+			_log("  canvas id %d layers %s parent_visible %s pos %s" % [int(entry["id"]), str(lay), str(cv.visible), str(cv.global_position)])
+			for l in cv._layers:
+				for rec in l.records:
+					_log("    rec pts %s tex %s" % [str(rec["pts"]), str(rec["tex"] != null)])
+			var pr = entry["program"]
+			_log("  program portal %s flame %s stage %s frame %s tributes %s" % [str(pr.get("portal")), str(pr.get("flame")), str(pr.get("stage")), str(pr.get("frame")), str(pr.get("tributes"))])
 
 
 func _on_tick() -> void:
@@ -155,9 +210,30 @@ func _on_tick() -> void:
 		"wait":
 			step_left = int(op[1])
 			steps.pop_front()
+		"star_press":
+			# the guardian star box: Cross until it is closed (a press can be lost, so it is repeated after a short wait)
+			if duel.mode == "star":
+				if not _busy():
+					steps.pop_front()
+					steps.push_front(["star_press"])
+					steps.push_front(["wait", 20])
+					steps.push_front(["key", KEY_E])
+				else:
+					steps.pop_front()
+					steps.push_front(["star_press"])
+					step_left = 0
+			elif _busy() or star_settle < 30:
+				# not busy: the star is armed by the placement's end, a few frames later at most
+				star_settle = 0 if _busy() else star_settle + 1
+				steps.pop_front()
+				steps.push_front(["star_press"])
+				step_left = 0
+			else:
+				star_settle = 0
+				steps.pop_front()
 		"if_star_confirm":
 			# the guardian star is asked once the placement has shown: wait for the box (or for the field to be idle without one)
-			if duel.mode == "star":
+			if duel.mode == "star" and not _busy():
 				steps.pop_front()
 				steps.push_front(["key", KEY_E])
 			elif not _busy() and duel.mode in ["hand", "field"]:
@@ -174,9 +250,15 @@ func _on_tick() -> void:
 		"cap":
 			capturing = bool(op[1])
 			steps.pop_front()
+		"call":
+			steps.pop_front()
+			if op[1] == "setup_battle":
+				_setup_battle()
+			elif op[1] == "battle":
+				_battle()
 		"key":
 			# held for three frames, released for three
-			_log("KEY %d pf=%d mode=%s" % [int(op[1]), Engine.get_physics_frames(), duel.mode])
+			_log("KEY %d pf=%d mode=%s star_zone=%d busy=%s held=%s" % [int(op[1]), Engine.get_physics_frames(), duel.mode, duel.star_zone, str(duel.fx.busy()), str(duel.held)])
 			_key(int(op[1]), true)
 			steps.pop_front()
 			steps.push_front(["release", int(op[1])])
@@ -201,6 +283,40 @@ func _on_tick() -> void:
 			steps.push_front(["release", KEY_ENTER])
 			step_left = 3
 	return
+
+
+func _zone_of(spec: Array) -> Dictionary:
+	# spec: [card id, "fu" or "fd", "atk" or "def"]
+	var z: Dictionary = duel.engine.state.make_zone(int(spec[0]), spec[1] == "fd", spec[2] == "def")
+	return z
+
+
+func _setup_battle() -> void:
+	var b: Dictionary = BATTLES[scen]
+	var s = duel.engine.state
+	for i in range(b["mine"].size()):
+		s.sides[0].monsters[i] = _zone_of(b["mine"][i])
+	for i in range(b["foe"].size()):
+		s.sides[1].monsters[i] = _zone_of(b["foe"][i])
+	duel.refresh()
+	_log("battle set: mine=%s foe=%s" % [str(b["mine"]), str(b["foe"])])
+
+
+func _battle() -> void:
+	var b: Dictionary = BATTLES[scen]
+	capturing = true
+	if b.get("foe_attacks", false):
+		# the CPU's turn: its monster attacks (the engine's attack, presented as the foe's action is)
+		var before: Array = duel._field_cards()
+		var events: Array = duel.engine.attack(1, int(b["a"]), int(b["t"]))
+		duel.engine.check_winner()
+		duel.fx.play(events, before, {"side": 1, "attacker": int(b["a"])})
+		_log("foe attack events: %s" % str(events))
+	else:
+		duel.mode = "field"
+		duel.attacker = int(b["a"])
+		duel._resolve_attack(int(b["t"]))
+	duel.refresh()
 
 
 func _process(_delta: float) -> bool:

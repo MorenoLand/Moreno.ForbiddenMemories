@@ -41,7 +41,7 @@ const BAR_FRAME_SOURCE := Rect2(0, 152, 320, 88)   # the dialog frame's panel in
 const BAR_FRAME_BORDER := Vector4(8, 8, 8, 8)     # its stone border, in source pixels
 const BAR_FRAME_OUTSIDE := 8.0                    # the frame is drawn around the box, its border outside the box
 var bar_frame_texture: Texture2D = null
-const BAR_TEXT := Vector2(16, 208)        # the bar box's text origin: 2 pixels above its top (the text box rule)
+const BAR_TEXT := Vector2(16, 210)        # the bar box's text origin: the name's glyph cells at y 212 (the reference's bar text, decoded from its prim trace)
 const SYMBOLS := {" ": 0, "<": 84, ">": 81, "/": 68, ".": 11, "'": 27, ",": 31, "-": 48, "#": 60, "&": 67, ":": 0}
 ## The computer's pacing, in frames (one per vblank, the reference's timeline: the phase dwells of the original's turn). The turn's
 ## first action waits out the draw phase and its resolution (FOE_DRAW: phases 2 and 3, 16 and 64 frames); then each action waits
@@ -102,7 +102,10 @@ var wheel_steps := 0                 # wheel notches in the hand and zone modes:
 const WHEEL_MODES := ["hand", "dest", "field", "target", "equip_pick"]   # the modes whose cursor the wheel moves
 var ready_ok := false
 var message := ""
-var viewer := false           # the card viewer (Triangle, T here): the hovered card's full panel, in any mode
+var viewer := false           # the card viewer (Triangle or T, or a tap on a hand card): the hovered card's picture and text over black
+var viewer_view = null              # the viewer's text box (CardView, built for the card shown)
+var viewer_card_ui: Dictionary = CardViewScript.load_ui()   # the card_ui pieces' layout (the picture's stats and labels)
+var viewer_pictures: Dictionary = {}   # "id:atk:def" -> the card viewer's picture (CardView.card_picture)
 var foe_ai
 var two_player := false              # the hot-seat duel (2P DUEL): side 1 is a second person, there is no AI
 var life_points: Array = [8000, 8000]  # two-player: each side's starting life points (the setup's values)
@@ -409,11 +412,22 @@ func _trap_at(local: Vector2) -> int:
 
 func refresh() -> void:
 	_clear()
+	if field != null:
+		field.set_shown(not _viewer_up())   # the card viewer's screen is black: the board and the readouts are off while it is up
+	hud.visible = not _viewer_up()
+	if _viewer_up():
+		var shown := _hovered_card()
+		if shown != 0:
+			_draw_panel(shown)
+		return
 	_draw_band()                # the information band first: the hand and the text draw over it (the duel frame's draw list)
 	var s = engine.state
 	var hand: Array = s.sides[0].hand
 	var foe_turn := mode == "foe"                # the computer's turn: the player's hand leaves the picture (the reference's field view)
-	for i in (0 if foe_turn or (fx != null and fx.hides_hand()) else hand.size()):
+	# the field view (a monster cursor on the board, or the equip's target): the hand is off the picture there too (reference frames
+	# of the placed monster and of the field phase show no hand; the hand shows in the hand phase only)
+	var field_view := mode == "field" or mode == "equip_pick" or mode == "star"     # the guardian star box is asked in the field view
+	for i in (0 if foe_turn or field_view or (fx != null and fx.hides_hand()) else hand.size()):
 		var at: Vector2 = DuelHand.place(i)
 		if mode in CENTRE_MODES and i == hand_index:
 			continue                    # the centred card is drawn by _draw_centre, away from its slot
@@ -739,9 +753,6 @@ func _draw_info() -> void:
 		if message != "":
 			_say(message, BAR_TEXT)     # a message sits on the bar's first text row (the bar is 16 high inside the band)
 		return
-	if viewer and mode != "over":
-		_draw_panel(id)     # the card viewer: the full panel for the hovered card, whatever the mode
-		return
 	_draw_bar_card(id)      # the selected card's name, and its stats or type on the right (the original's bottom bar)
 
 
@@ -790,12 +801,14 @@ func _draw_bar_card(id: int) -> void:
 			_board_put(Vector2(211, 218), BAR_ICONS + "label_shield.png")
 			_bar_digits(atk, Vector2(243, 210))
 			_bar_digits(dfn, Vector2(243, 218))
-		var digits := maxi(str(atk).length(), str(dfn).length()) if not face_down_zone else 0
-		var icon_x := 243.0 + 8.0 * digits + 2.0 if not face_down_zone else 253.0
+		# the race icon sits at x 253 whatever the digit count: the digits are right aligned to the units cell at 243 (the reference's
+		# bar: ATK 1200 in the cells 219 to 243, DEF 700 in 227 to 243, the race icon at 253 in a face-up Baby Dragon's field bar)
+		var icon_x := 253.0
 		if race >= 0:
 			_board_put(Vector2(icon_x, 210), RACE_ICONS + "%02d.png" % race)
-		var star_x := icon_x + 18.0
-		if not face_down_zone:
+		var star_x := icon_x + 26.0
+		# the field's bar (the monster cursor on the board) shows the race and the attribute only; the reference draws no guardian star there
+		if not face_down_zone and not (mode in ["dest", "field", "target"]):
 			for key in ["guardian_star_1", "guardian_star_2"]:
 				var star: String = str(strip.get(key, ""))
 				if star != "":
@@ -813,65 +826,67 @@ func _draw_bar_card(id: int) -> void:
 			_board_put(Vector2(271.0 if mode == "hand" else 279.0, 210), RACE_ICONS + "%02d.png" % race)
 
 
-## The bar's digits: 8 x 8 cells (duel_bar/digit_<d>.png), left aligned from x with no padding.
+## The bar's digits: 8 x 8 cells (duel_bar/digit_<d>.png), right aligned: the units digit's cell starts at at.x, the tens 8 to its left,
+## and so on (the reference's bar: 1200 in the cells 219 to 243, 700 in 227 to 243).
 func _bar_digits(value: int, at: Vector2) -> void:
 	var text_value := str(value)
-	for i in text_value.length():
-		_board_put(at + Vector2(8.0 * i, 0), BAR_ICONS + "digit_%s.png" % text_value.substr(i, 1))
+	var n := text_value.length()
+	for i in n:
+		_board_put(at + Vector2(8.0 * (i - (n - 1)), 0), BAR_ICONS + "digit_%s.png" % text_value.substr(i, 1))
 
 
-## The card panel in the viewer's layout (duel_card_viewer / the routine at 0x800283F4): the picture at (2, 20), the text box at (148, 14). The
-## box here ends at line 174, above the hand. It shows the picture, name, kind, level, ATK and DEF (the monster's own, or the
-## field's when the card is on the field), guardian stars, attribute and the card's description (string 0x100 + id, the card's
-## text in the text bank, D100 + id in the US strings).
-## The card-kind icon's name: monster, magic, trap or ritual (an equip uses the magic icon, as the game's kind icon does).
-func _kind_icon(id: int) -> String:
-	var kind := DuelCardFace.kind_of(str(data.card(id).get("type", "")))
-	return "magic" if kind == "equip" else kind
+## The card viewer's screen (Triangle, or a tap on a hand card): the reference's viewer over black, with the field and the hand off. The
+## whole card at 1x at (2, 24), composed by CardView.card_picture (its frame, picture, name plate, kind label or level stars with ATK and
+## DEF, and the attribute ball). The card's text box at (148, 34), framed by the library's card frame 8 pixels out, holds the kind, the
+## guardian stars and the text (CardView's box without the stats, which are on the card).
+const VIEW_CARD_AT := Vector2(2, 24)
+const VIEW_BOX_AT := Vector2(148, 34)
+const VIEW_BOX_FRAME := "res://assets/screens/library/card_frame.png"
+const VIEW_TEXT_DOWN := Vector2(0, 2)
+
+
+## The card viewer is up over the board (the end screens take no viewer).
+func _viewer_up() -> bool:
+	return viewer and mode != "over" and mode != "result"
 
 
 func _draw_panel(id: int) -> void:
 	var c: Dictionary = data.card(id)
-	var box := Vector2(148, 14)
-	_rect(box, Vector2(168, 160), Color(0.02, 0.03, 0.08), true)
-	_rect(box, Vector2(168, 160), Color(0.8, 0.6, 0.3))
-	_board_put(Vector2(2, 20), "res://assets/images/card_art/%03d.png" % id)
-	# the name and the description are the card's own strings (the card name string and the card text bank, through the game's text system)
-	var named: Array = text.layout(board, text.card_name_bytes(id), box + Vector2(6, 4), Vector2(8, 12), 0, sharp, true)
-	DuelHud.clip_placed(named, Rect2(box, Vector2(168, 14)))
-	# the description runs down the box and is clipped at its bottom edge (the box ends at line 174)
-	var described: Array = text.layout(board, text.card_description_bytes(id), box + Vector2(6, 58), Vector2(8, 12), 0, sharp, true)
-	DuelHud.clip_placed(described, Rect2(box + Vector2(0, 56), Vector2(168, 118)))
-	if engine.state.is_monster(id):
-		# the guardian stars: each star's icon (the text's icon entry 0x17 + the star's id, from star_icons/), a blank, then its name (the
-		# text bank's string 0x8317 + id)
-		var star_x := 6.0
-		for key in ["guardian_star_1", "guardian_star_2"]:
-			var star_index: int = engine.STARS.get(str(c.get(key, "")), 0)
-			if star_index == 0:
-				continue
-			_board_put(box + Vector2(star_x, 44), STAR_ICONS + str(c[key]).to_lower() + ".png")
-			var name: Array = text.string_bytes(0x8300 + 0x17 + star_index)
-			text.layout(board, name, box + Vector2(star_x + 24, 44), Vector2(8, 12), 0, sharp, true)
-			star_x += 24.0 + 8.0 * name.find(0xFF) + 8.0
-		var z = null
-		if mode in ["dest", "field"]:
-			z = engine.state.sides[0].monsters[zone_index]
-		elif mode == "target":
-			z = engine.state.sides[1].monsters[zone_index]
-		var atk: int = engine.state.atk(z) if z != null else int(c["attack"])
-		var dfn: int = engine.state.def(z) if z != null else int(c["defense"])
-		_say("%s LV %d" % [str(c.get("type", "")).to_upper(), int(c.get("level", 0))], box + Vector2(6, 16))
-		_board_put(Vector2(4, 122), CARD_UI + "label_atk.png")
-		_ui_number(Vector2(40, 122), atk, 4)
-		_board_put(Vector2(4, 134), CARD_UI + "label_def.png")
-		_ui_number(Vector2(40, 134), dfn, 4)
-	else:
-		_say(str(engine.state.card_type(id)).to_upper(), box + Vector2(6, 16))
-	# the card-kind icon (card_ui/card_type_<kind>.png, the boot UI's 16 x 16 kind cell in its kind colour); the duel panel has no place for it
-	# in the game, so it sits at the panel's top right (the Build Deck list shows it at its own places)
-	_board_put(box + Vector2(146, 14), CARD_UI + "card_type_%s.png" % _kind_icon(id))
-	# The attribute icon is not drawn yet: its place is not in the card text.
+	var atk := int(c.get("attack", 0))
+	var dfn := int(c.get("defense", 0))
+	var z = null
+	if mode in ["dest", "field"]:
+		z = engine.state.sides[0].monsters[zone_index]
+	elif mode == "target":
+		z = engine.state.sides[1].monsters[zone_index]
+	if engine.state.is_monster(id) and z != null:
+		# a monster on the field shows its current ATK and DEF
+		atk = engine.state.atk(z)
+		dfn = engine.state.def(z)
+	var picture := _viewer_picture(id, c, atk, dfn)
+	if picture != null:
+		var card := Sprite2D.new()
+		card.centered = false
+		card.texture = picture
+		card.material = sharp
+		card.position = VIEW_CARD_AT
+		board.add_child(card)
+	_board_put(VIEW_BOX_AT + Vector2(-8, -8), VIEW_BOX_FRAME)
+	if viewer_view == null:
+		viewer_view = CardViewScript.new(text, sharp)
+	var box := Node2D.new()
+	box.position = VIEW_BOX_AT + VIEW_TEXT_DOWN   # the box's rows sit 2 pixels below its frame's top (the reference's viewer)
+	board.add_child(box)
+	viewer_view.build(box, null, id, c, false)
+
+
+## The card's picture for these values (ATK and DEF as shown), cached per card and value.
+func _viewer_picture(id: int, c: Dictionary, atk: int, dfn: int) -> Texture2D:
+	var key := "%d:%d:%d" % [id, atk, dfn]
+	if not viewer_pictures.has(key):
+		var image: Image = CardViewScript.card_picture(id, c, atk, dfn, viewer_card_ui)
+		viewer_pictures[key] = ImageTexture.create_from_image(image) if image != null else null
+	return viewer_pictures[key]
 
 
 ## A sprite of a picture under res://assets/ on the board (the panel's pictures and icons); nothing when the picture is missing.
@@ -887,20 +902,11 @@ func _board_put(at: Vector2, path: String) -> void:
 	board.add_child(sprite)
 
 
-## A number from the card UI's digit sprites (6 x 13 each), in `count` cells with the leading zeros left blank.
-func _ui_number(at: Vector2, value: int, count: int) -> void:
-	var shown := str(clampi(value, 0, 9999))
-	for i in shown.length():
-		_board_put(at + Vector2(6 * (count - shown.length() + i), 0), CARD_UI + "digit_%s.png" % shown[i])
-
-
 # ---- the readouts ----------------------------------------------------------------------------------------------------------
 
-const CARD_FRAMES := "res://assets/images/card_frames/"
 const STAR_ICONS := "res://assets/screens/star_icons/"   # the guardian star symbols, 16 x 16, baked from the disc (tools/extract.py bake_star_icons)
 const RACE_ICONS := "res://assets/screens/race_icons/"   # the race and kind icons, codes 0 to 23 (tools/extract.py bake_race_icons)
 const BAR_ICONS := "res://assets/screens/duel_bar/"      # the bar's sword, shield and digit cells (tools/extract.py bake_duel_bar_icons)
-const CARD_UI := "res://assets/screens/card_ui/"   # the card UI sprites: digits, labels, attributes, level stars (extracted by tools/extract.py)
 const CARD_DIGITS := "res://assets/screens/duel_card/"   # the 8 x 8 digit cells of the duel card (tools/extract.py bake_duel_card_face): the readouts' digits
 const HUD_PANEL := "res://assets/screens/duel_hud/"   # the readout panels: life-point panel, flipped for the second player (extracted by tools/extract.py)
 const ICONS := "res://assets/images/"
@@ -1176,11 +1182,16 @@ func _physics_process(_delta: float) -> void:
 	var start := _edge("start", [KEY_ENTER])
 	var up := _edge("up", [KEY_UP, KEY_W])
 	var down := _edge("down", [KEY_DOWN, KEY_S])
-	if _edge("viewer", [KEY_T]):
-		viewer = not viewer
+	if _edge("viewer", [KEY_T]) and (viewer or help == null or help.overlay_kind == ""):
+		_set_viewer(not viewer)     # Triangle (T) shows the card under the hand cursor, or closes the viewer; not over the help sheet
 	confirm = confirm or _take("confirm")
 	cancel = cancel or _take("cancel")
 	mark = mark or _take("mark")
+	if viewer and mode not in ["foe", "deal", "over", "result"]:
+		# the card viewer takes the pad, as the reference's viewer does: only its close keys act (Circle or Q, Escape, Backspace)
+		if cancel:
+			_set_viewer(false)
+		return
 	var help_key := _edge("help", [KEY_H, KEY_TAB]) or (_edge("help_question", [KEY_SLASH]) and Input.is_key_pressed(KEY_SHIFT))
 	if help.frame(help_key, up, down, confirm, cancel, left or right or up or down or confirm or cancel or mark or flip or start):
 		return                  # the controls sheet or the tutorial is open: the duel waits for it to close
@@ -1333,6 +1344,14 @@ func _physics_process(_delta: float) -> void:
 			refresh()
 
 
+## The card viewer on or off: the Triangle key (T), a tap on a hand card (on) and a tap or a click while it is up (off) all play the
+## reference's viewer sound (0x34) and redraw the screen.
+func _set_viewer(on: bool) -> void:
+	viewer = on
+	sound.emit(0x34)
+	refresh()
+
+
 func _take(which: String) -> bool:
 	var was: bool = mouse_pending.get(which, false)
 	mouse_pending[which] = false
@@ -1348,10 +1367,24 @@ func _gui_input(event: InputEvent) -> void:
 		_spectator_mouse(event)
 		return
 	if event is InputEventMouseMotion:
-		_hover(event.position)
+		if not viewer:
+			_hover(event.position)      # the card viewer shows its card: the pointer leaves the cursors alone while it is up
 		return
 	if not (event is InputEventMouseButton and event.pressed):
 		return
+	if viewer:
+		# the card viewer is up: a tap or a click closes it (tapping again closes it), and the wheel does nothing
+		if event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_RIGHT]:
+			_set_viewer(false)
+		return
+	if event.button_index == MOUSE_BUTTON_LEFT and mode == "hand" and not fx.busy() and (help == null or help.overlay_kind == ""):
+		# a tap on a hand card shows it in the card viewer (the pick is made with Cross or E, and the viewer closes on the next tap)
+		var n: int = engine.state.sides[0].hand.size()
+		var at := DuelHand.index_at((event.position - world.position) / world.scale, n)
+		if at >= 0 and at < n:
+			hand_index = at
+			_set_viewer(true)
+			return
 	if event.button_index == MOUSE_BUTTON_WHEEL_UP or event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 		# the wheel moves the hand or zone cursor left (up) or right (down), as the arrows do
 		if mode in WHEEL_MODES:
@@ -1530,6 +1563,15 @@ func _lift() -> void:
 func _resolve_held(id: int) -> void:
 	var before: Array = _field_cards()
 	var events: Array = engine.play(0, pending["picks"])
+	# a ritual's monster with two guardian stars asks for its star once it is placed (as a placement does: _place)
+	for e in events:
+		if str(e["kind"]) == "summon" and int(e["side"]) == 0:
+			var card: Dictionary = data.card(int(e["id"]))
+			var star_one := str(card.get("guardian_star_1", ""))
+			var star_two := str(card.get("guardian_star_2", ""))
+			if star_two != "" and star_two != star_one:
+				star_id = int(e["id"])
+				star_zone = int(e["zone"])
 	_after_play(events, before, {"card": id, "cards": [id]})
 
 

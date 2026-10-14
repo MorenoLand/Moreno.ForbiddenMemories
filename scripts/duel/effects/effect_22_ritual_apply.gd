@@ -53,10 +53,22 @@ var active_cards := 0
 var active_particles := 0
 var fan_speed := 8
 var card_count := 0
+var revealed := false           # the tributes are shown again (the flight's start)
 
 
 func _init() -> void:
 	geometry = Vector2i(160, 108)
+	world = field_view()
+
+
+## The duel's field view as the apply's geometry sees it (the view matrix the game holds while the field is shown, read from the
+## reference's geometry trace of the apply: the rotation about x and the view offset of 602 in depth). The portal's points are then
+## 397 deep at the tributes' z of -95 (the portal at -190), which places its quads and flames where the reference draws them.
+static func field_view() -> Gte.Mat:
+	var view := Gte.Mat.new()
+	view.m = PackedInt32Array([4125, 0, 0, 0, 3779, -1585, 0, 1573, 3805])
+	view.t = PackedInt32Array([0, -4, 602])
+	return view
 
 
 func dispatch(phase: int) -> void:
@@ -121,6 +133,7 @@ func _start(phase: int) -> void:
 	stage = 0
 	frame = 0
 	hold = 0
+	revealed = false
 	active_particles = 0
 	fan_speed = 8
 	portal = PackedInt32Array([1, 1, 1])
@@ -176,6 +189,11 @@ func _update() -> void:
 			fade_down(flame, 8)
 	# the tributes: drawn toward the portal's point; each is shrunk out at the point, then the last one hides them all
 	if _neutral(flame) and stage == 0:
+		if not revealed:
+			# the tributes come back into the picture as their flight starts (they were taken off it with the window)
+			revealed = true
+			for record in tributes:
+				board.set_shown(record, true)
 		var i := 0
 		while i < active_cards:
 			var record: int = tributes[i]
