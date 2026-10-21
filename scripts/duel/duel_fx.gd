@@ -42,7 +42,7 @@ const FUSION_VIEW_HOLD := 32
 const EQUIP_REST := 12                           # the equip card rests on the chosen monster before the monster rises (the reference: its burst about 99 frames from the flight)
 const EQUIP_VIEW_CENTRE := Vector2(90, 113)   # the equip's monster view (the reference's card at zone 0)
 const SET_DROP_LEAD := 12                      # a set card's drop: the frames before it leaves the hand's place (the reference's drop starts about +12)
-const SET_DROP_FLIGHT := 36                     # its flight to the zone (the reference's card is on the back row about +48)
+const SET_DROP_FLIGHT := 36                     # the frames from the lead to the card on its zone (the reference's card is on the back row about +48)
 const EQUIP_FLOAT := 0                           # the monster rises at once into the placement's burst (the reference: the burst about 99 frames from the flight)
 const FUSION_VIEW_CENTRE := Vector2(128, 115)    # the fused card's view centre (the reference: 32 left and 5 up of the window's centre)
 const RITUAL_STAND_FRAMES := 36                 # the monster rises into its zone after the view (the reference's field shows it at about +528)
@@ -661,20 +661,15 @@ func _appear(record: int) -> void:
 	_beat(start, 10)
 
 
-## A card set face down: it flies from the hand's place to its zone (the reference's drop, about 36 frames), then it is on the field.
+## A card set face down: the reference shows no flight for it. The frame is blank for the drop's lead and the card is on its zone (the back
+## row, about +48 frames from the set) with nothing drawn over the centre of the board; the picture then zooms (duel_scene.gd).
 func _set_drop(record: int, id: int) -> void:
 	var lead := func() -> void:
 		pass                            # the card is still in the hand's place for a short while (the reference's drop starts about 12 frames in)
 	_beat(lead, SET_DROP_LEAD)
-	var fly := func() -> void:
-		var box := _rect(record)
-		var from := Vector2(CENTRE.x, 180.0)
-		var offset := box.get_center() - from
-		var anim := func(p: float) -> Dictionary:
-			return {"dx": offset.x * p, "dy": offset.y * p, "sx": 1.0 - 0.6 * p, "sy": 1.0 - 0.6 * p}
-		_card(_face(id), Rect2(from - CARD_RECT_SIZE / 2.0, CARD_RECT_SIZE), SET_DROP_FLIGHT, 0, anim, null, 2.0, Callable())
-	_beat(fly, SET_DROP_FLIGHT)
-	_appear(record)
+	var land := func() -> void:
+		_add(record)
+	_beat(land, SET_DROP_FLIGHT)
 
 
 func _turn(record: int) -> void:

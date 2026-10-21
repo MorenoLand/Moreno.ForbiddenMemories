@@ -667,6 +667,10 @@ func _place_sprites() -> void:
 		sprite.scale = Vector2(view_scale * FLAT_SIZE.x / size.x, view_scale * FLAT_SIZE.y / size.y)
 		# the flat sprite sits FLAT_OFFSET_Y above the centred cell, as _flat_box puts its box (the reference's sprite top is 54 on cell 53..113)
 		sprite.position = camera.unproject_position(_godot(grid_position(record))).round() + Vector2(0.0, FLAT_OFFSET_Y * view_scale)
+		# a card in defence lies sideways in the near view: the flat picture turns a quarter (counter-clockwise, its top to the left) about its centre as the 3D card does
+		# (the reference turns it in 8 steps of 11.25 degrees). The 3D turn's angle is the card's rotation from its attack base (0, or 180 for foe).
+		var base := 180.0 if record >= 20 else 0.0
+		sprite.rotation_degrees = wrapf(node.rotation_degrees.y - base, -180.0, 180.0)
 		var tint := Color(1.0, 1.0, 1.0)
 		var material: ShaderMaterial = (node.mesh as ArrayMesh).surface_get_material(0)
 		var pulse = material.get_shader_parameter("flip_tint") if material != null else null

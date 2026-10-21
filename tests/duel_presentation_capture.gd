@@ -44,6 +44,7 @@ const SCENES := {
 	"battle_e": {"deck": [1, 428, 5, 6, 7, 8, 9, 10], "hand": [5, 6, 7, 8, 9]},
 	"battle_f": {"deck": [1, 5, 6, 7, 8, 9, 10, 11], "hand": [5, 6, 7, 8, 9]},
 	"battle_g": {"deck": [428, 5, 6, 7, 8, 9, 10, 11], "hand": [5, 6, 7, 8, 9]},
+	"l1_toggle": {"deck": [4, 5, 6, 7, 8, 9, 10, 11], "hand": [5, 6, 7, 8, 9]},
 }
 # battle scenarios: the monsters are set on the field before the attack (the reference's cases: its player's monster and the CPU's
 # monster, by card id; "fu"/"fd" face up or down, "atk"/"def" position). Attacker zone a, target zone t (-1: a direct attack).
@@ -104,6 +105,9 @@ func _hand_index_of(card: int) -> int:
 func _script() -> Array:
 	# ops: ["wait", n] / ["until_hand"] / ["key", keycode] (3 frames down, 3 up) / ["cap", bool] / ["call", name]
 	var s: Array = [["cap", true], ["until_hand"]]
+	if scen == "l1_toggle":
+		# an own face-up monster on the field; the field cursor on it; L1 (Z) turns it to defence, the picture held from the press
+		return [["cap", false], ["until_hand"], ["call", "setup_toggle"], ["wait", 30], ["cap", true], ["key", KEY_Z], ["wait", 40], ["cap", false]]
 	if BATTLES.has(scen):
 		# the field is set up, then the battle (or the CPU's attack) is pictured from its start to the field's return
 		s = [["cap", false], ["until_hand"], ["call", "setup_battle"], ["wait", 30], ["call", "battle"], ["wait", 480], ["cap", false]]
@@ -289,7 +293,15 @@ func _on_tick() -> void:
 			steps.pop_front()
 		"call":
 			steps.pop_front()
-			if op[1] == "setup_battle":
+			if op[1] == "setup_toggle":
+				duel.engine.state.sides[0].monsters[0] = _zone_of([4, "fu", "atk"])
+				duel.refresh()
+				duel.mode = "field"
+				duel.zone_row = 0
+				duel.zone_index = 0
+				duel._focus_camera(1)
+				duel.refresh()
+			elif op[1] == "setup_battle":
 				_setup_battle()
 			elif op[1] == "battle":
 				_battle()
