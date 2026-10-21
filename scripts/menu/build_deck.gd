@@ -30,7 +30,6 @@ signal closed                 # the screen is left: back to the menu (the build 
 signal sound(effect: int)     # the full SE play ids: 6 cursor moves, 7 card moved, 8 leave, 9 refused, 0x1E pane slide, 0x2F sort
 signal music(id: int)         # the Build Deck BGM (the routine at 0x800323F8's the BGM play 0x70E0): nothing plays it yet, the hook is here
 
-const TextFrame := preload("res://scripts/ui/text_frame.gd")
 const ScreenFit := preload("res://scripts/system/screen_fit.gd")
 const GameText := preload("res://scripts/ui/game_text.gd")
 const CardDB := preload("res://scripts/data/card_db.gd")
@@ -41,6 +40,9 @@ const DIR := "res://assets/screens/build_deck/"
 const CARD_COUNT := 722
 const DECK_SIZE := 40
 const COPY_LIMIT := 3                         # DECK_CARD_COPY_LIMIT
+const ROW_TEXT_X := [0x22, 0x22 + 0x160]      # the name lines' x (TextBox_Create's 0x22, the deck's box 0x160 to the right)
+const ROW_STRING := 6                         # the text bank string of a row that holds a card (style 6: flags != 0)
+const ROW_TEXT_DY := 2                        # the name line sits two pixels below the row's top (measured against the reference)
 const CHEST_LIMIT := 250                      # CARD_CHEST_QUANTITY_MAX
 const EXODIA_FIRST := 0x11
 const EXODIA_COUNT := 5
@@ -68,11 +70,11 @@ const DECK_TOTAL_ADDRESS := 0x801D560C      # the data at 0x801D5608[0].build_de
 const DIGIT_SJIS := 0x824F                  # the Shift-JIS code of '0'; the digits follow it
 const DIALOG_STRING := 9                      # BUILD DECK / EXIT ... SETTLED? (the narrow confirmation)
 const DIALOG_RECT := Rect2(48, 96, 224, 48)   # the flagged text box creation(0, 9, 0x30, 0x60, 0xE0, 0x30)
-const DIALOG_TEXT := Vector2(56, 94)          # the text at the box top - 2 (the story dialog's line origin)
-const DIALOG_FRAME_SOURCE := Rect2(0, 152, 320, 88)   # the dialog frame's panel in the story frame picture
-const DIALOG_FRAME_BORDER := Vector4(8, 8, 8, 8)     # its stone border, in source pixels
-const DIALOG_LINE_TOP := 107.0               # the first choice line's highlight top: the string opens with an empty line (its line break), so the choices are the second and third lines (line top 94 + 12 + 1), 12 a line, 10 tall
-const DIALOG_FRAME_OUTSIDE := 8.0            # the stone frame is drawn around the text box, its border outside the box
+const DIALOG_TEXT := Vector2(48, 97)          # the text's pen: its string opens with a blank cell, so the words start at 56 (the reference's 57)
+const DIALOG_PANEL := Rect2(15, 82, 290, 72)   # the black panel the confirmation sits in (measured on the reference: x 15 to 305, y 82 to 154)
+const BAR_RAMP := [0.03, 0.12, 0.22, 0.3, 0.38, 0.47, 0.56, 0.66, 0.75, 0.85, 0.94, 0.75, 0.56, 0.28, 0.0]   # the choice bar's brightness, row by row
+const DIALOG_FADE := 0x58                   # the board's level with the confirmation up (0xFF normal, 0x40 under the viewer)
+const DIALOG_LINE_TOP := 111.0              # the first choice line's highlight top (measured on the reference: the bar sits 111 to 121), 12 a line
 # the pointer's places in the workspace: the ORDER bars of the two panes (the sort name's bar cycles the sort), the L2, L1, R1 and R2
 # pictures of the page column (the deck pane's left edge, the page_buttons picture at (320, 40) and its two groups)
 const HEADER_BAR := [Rect2(97, 10, 170, 24), Rect2(385, 10, 172, 24)]
@@ -143,6 +145,9 @@ var wheel_steps := 0                          # mouse wheel notches: negative up
 var mouse_keys: Dictionary = {}               # pointer presses on the buttons, taken as one tick of the named key
 var drag_pane := -1                          # the scroll thumb being dragged (the pane), -1 for none
 var drag_grab := 0.0                         # the pointer's offset inside the thumb when the drag began
+var row_view: CardView                       # draws the rows' name lines (race icon, guardian stars, name)
+var row_layers: Array = []                   # per list: the Node2D that holds its visible rows' name lines
+var row_signature: Array = [[], []]          # per list: the ids and flags of the rows the name lines were built from
 
 
 func _ready() -> void:
@@ -184,6 +189,11 @@ func _ready() -> void:
 	board.draw.connect(_draw_board)
 	clip.add_child(board)
 	board.add_child(counts_line)
+	row_view = CardView.new(text, sharp)
+	for k in 2:
+		var layer := Node2D.new()
+		board.add_child(layer)
+		row_layers.append(layer)
 	viewer_shade.color = Color(0, 0, 0, 0)
 	viewer_shade.size = Vector2(320, 240)
 	viewer_shade.z_index = 8
@@ -545,7 +555,39 @@ func _physics_process(_delta: float) -> void:
 		closed.emit()
 		return
 	board.position = Vector2(-viewport_x, 0)
+	# the board's dim: the viewer's level under the viewer, the confirmation's level with it up, else full
+	var level := viewer_fade if viewer_open or not dialog_open else DIALOG_FADE
+	viewer_shade.color = Color(0, 0, 0, 1.0 - level / 255.0)
+	_refresh_rows()
 	board.queue_redraw()
+
+
+## The name lines of the visible rows (the text boxes of CardList_CreateSlotTextBox: each slot's box at the list's origin, one row
+## step down, the deck's box 0x160 to the right). A row's text is rebuilt only when the rows on the page change.
+func _refresh_rows() -> void:
+	for k in 2:
+		var list: Dictionary = lists[k]
+		var signature: Array = []
+		for i in PAGE:
+			var index: int = list.first + i
+			if index < list.rows.size():
+				signature.append([list.rows[index].id, list.rows[index].flags])
+		if signature == row_signature[k]:
+			continue
+		row_signature[k] = signature
+		var layer: Node2D = row_layers[k]
+		for child in layer.get_children():
+			layer.remove_child(child)
+			child.free()
+		for i in signature.size():
+			var row: Dictionary = list.rows[list.first + i]
+			if row.flags == 0:
+				continue
+			var holder := Node2D.new()
+			holder.position = Vector2(ROW_TEXT_X[k], ROW_TOP + ROW_STEP * i + ROW_TEXT_DY)
+			layer.add_child(holder)
+			var tint := Color(0.5, 0.5, 0.5) if (row.flags & FLAG_HELD) != 0 else Color(1, 1, 1)
+			row_view.build_row(holder, row.id, cards.card(row.id), text.string_bytes(ROW_STRING), tint)
 
 
 ## the routine at 0x80033BE8: the step table, the data at 0x80090DF8, for state & 0x3F.
@@ -738,10 +780,9 @@ func _leave(pad: Dictionary) -> void:
 			dialog_choice = moved
 			sound.emit(6)
 			_rebuild_dialog()
+		# the confirmation is a text box: only Cross answers it (Circle and Triangle do nothing, as the reference shows)
 		if pad.pressed.has("confirm"):
 			_answer_dialog(dialog_choice)
-		elif pad.pressed.has("cancel"):
-			_answer_dialog(0)
 		return
 	_save()
 	_set_state(STATE_DONE)
@@ -768,38 +809,26 @@ func _rebuild_dialog() -> void:
 		child.queue_free()
 	if not dialog_open:
 		return
-	# the box is the campaign dialog frame (assets/screens/story/frame.png, its panel nine-sliced around the box)
-	var frame_tex := _dialog_frame()
-	var back := Node2D.new()
-	dialog.add_child(back)
-	# the frame's border lies outside the text box: its panel is the box grown by the border on every side
-	var frame_rect := DIALOG_RECT.grow(DIALOG_FRAME_OUTSIDE)
-	if frame_tex != null:
-		back.draw.connect(func() -> void: TextFrame.draw(back, frame_tex, DIALOG_FRAME_SOURCE, frame_rect, DIALOG_FRAME_BORDER))
-	else:
-		var black := ColorRect.new()
-		black.color = Color(0, 0, 0, 0.9)
-		black.position = frame_rect.position
-		black.size = frame_rect.size
-		back.add_child(black)
+	# the confirmation is a plain black panel over the dimmed board (no stone frame: the reference's window)
+	var panel := ColorRect.new()
+	panel.color = Color.BLACK
+	panel.position = DIALOG_PANEL.position
+	panel.size = DIALOG_PANEL.size
+	dialog.add_child(panel)
 	text.layout(dialog, text.string_bytes(DIALOG_STRING), DIALOG_TEXT, Vector2(8, 12), 0, sharp, true)
-	# the choice highlight: the yellow additive bar of the story's choice lines, across the box's width, 10 tall from its line's top + 1
-	var bar := Polygon2D.new()
-	var edge := Color(0.19, 0.19, 0.0)
-	var mid := Color(0.75, 0.75, 0.0)
-	var top := DIALOG_LINE_TOP + 12.0 * dialog_choice
-	var x0 := DIALOG_RECT.position.x
-	var x1 := DIALOG_RECT.end.x
-	var centre := (x0 + x1) / 2.0
-	bar.polygon = PackedVector2Array([Vector2(x0, top), Vector2(centre, top), Vector2(x1, top), Vector2(x1, top + 10), Vector2(centre, top + 10), Vector2(x0, top + 10)])
-	bar.vertex_colors = PackedColorArray([edge, mid, edge, edge, mid, edge])
+	# the choice highlight: a yellow additive bar across the box's width, its brightness rising and falling down the line (the
+	# reference's column profile, from three rows above the line's top to eight below it), even across the width
 	var add := CanvasItemMaterial.new()
 	add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
-	bar.material = add
-	dialog.add_child(bar)
+	var top := DIALOG_LINE_TOP + 12.0 * dialog_choice
+	for k in BAR_RAMP.size():
+		var strip := ColorRect.new()
+		strip.color = Color(BAR_RAMP[k], BAR_RAMP[k], 0.0)
+		strip.material = add
+		strip.position = Vector2(DIALOG_RECT.position.x, top - 3 + k)
+		strip.size = Vector2(DIALOG_RECT.size.x, 1)
+		dialog.add_child(strip)
 
-
-var dialog_frame_texture: Texture2D
 
 # ---- the card viewer (Triangle on a card, as the duel's card viewer opens from the Build Deck) ----
 var viewer_open := false                   # the viewer is up (sliding in, shown, or sliding out)
@@ -816,14 +845,6 @@ var viewer_icons := Node2D.new()
 var viewer_frame_offset := Vector2(-8, -8)  # the frame picture's offset from its box (the library's card_frame layout)
 var viewer_view: CardView                  # the card view's text box, stats and icons (shared with the Library)
 
-
-
-func _dialog_frame() -> Texture2D:
-	if dialog_frame_texture == null:
-		var image := Image.load_from_file("res://assets/screens/story/frame.png")
-		if image != null:
-			dialog_frame_texture = ImageTexture.create_from_image(image)
-	return dialog_frame_texture
 
 
 ## The deck as the save keeps it: its rows in order, 0 for an empty row; the owned copies are the chest's plus the deck's.

@@ -950,8 +950,8 @@ func _choose(before: int, count: int) -> int:
 	var edge := Color(0.19, 0.19, 0.0)
 	var mid := Color(0.75, 0.75, 0.0)
 	var top := BOX.position.y - 2.0 + 12.0 * before + 1.0   # the glyphs' rows sit one line-pixel below the cell top
-	bar.polygon = PackedVector2Array([Vector2(16, top), Vector2(160, top), Vector2(304, top), Vector2(304, top + 10), Vector2(160, top + 10), Vector2(16, top + 10)])
-	bar.vertex_colors = PackedColorArray([edge, mid, edge, edge, mid, edge])
+	bar.polygon = PackedVector2Array([Vector2(16, top), Vector2(304, top), Vector2(304, top + 6), Vector2(304, top + 10), Vector2(16, top + 10), Vector2(16, top + 6)])
+	bar.vertex_colors = PackedColorArray([edge, edge, mid, edge, edge, mid])
 	var add := CanvasItemMaterial.new()
 	add.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
 	bar.material = add

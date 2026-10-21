@@ -17,6 +17,7 @@ const RACE_ICONS := "res://assets/screens/race_icons/"
 const BOX_SIZE := Vector2(168, 192)
 const LINE := 12
 const GLYPH_ADVANCE := 8
+const ROW_CUT_X := 128.0                # a list row's name line: 16 glyphs (the row's box is cut there)
 const ICON_ADVANCE := 16
 const LAYOUT_MONSTER := 3       # the text bank string of a monster's layout
 const LAYOUT_OTHER := 4         # the text bank string of a spell, trap, ritual or equip
@@ -60,6 +61,8 @@ var _id := 0
 var _race := 0
 var _stars: Array = [0, 0]
 var _pen := Vector2.ZERO
+var _tint := Color(1, 1, 1)
+var _cut_x := -1.0             # a list row's name line: glyphs past this pen x are not drawn (-1: the box wraps instead)
 
 
 func _init(game_text, material: Material) -> void:
@@ -159,6 +162,18 @@ func _run(bytes: Array, depth: int) -> void:
 				_pen = Vector2(0, _pen.y + (operand - 256 if operand >= 128 else operand))
 			elif entry == 0 and depth < 4:
 				_command(operand, depth)
+			elif entry == 2:
+				# the pen moves on by the operand (the text engine's F8 02)
+				_pen.x += operand
+			elif entry == 6:
+				# the pen's x is sixteen bits, read signed: a second operand byte follows (F8 06 lo hi)
+				var high := int(bytes[i]) if i < bytes.size() else 0
+				i += 1
+				var pen := operand | (high << 8)
+				_pen.x = float(pen - 0x10000 if pen >= 0x8000 else pen)
+			elif entry == 7:
+				# a two-byte operand (F8 07 a b): no picture in the name line
+				i += 1
 			continue
 		if b >= 0xF0:
 			continue
@@ -198,13 +213,40 @@ func _icon(code: int) -> void:
 
 ## A guardian star's icon at the pen, then the pen moves on past it.
 func _star_icon(star: int) -> void:
-	_place(_texture(STAR_ICONS + STAR_FILES[star] + ".png"), _pen)
+	var path: String = STAR_ICONS + String(STAR_FILES[star]) + ".png"
+	_place(_mono_icon(path) if _cut_x >= 0.0 else _texture(path), _pen)
 	_pen.x += ICON_ADVANCE
+
+
+## A guardian star in a list row: the text's ramp draws the star in greys (the dark ground is left out), not in the icon's own colours.
+func _mono_icon(path: String) -> Texture2D:
+	var key := "mono:" + path
+	if not icon_cache.has(key):
+		var image := Image.load_from_file(path)
+		if image == null:
+			icon_cache[key] = null
+		else:
+			image.convert(Image.FORMAT_RGBA8)
+			for y in image.get_height():
+				for x in image.get_width():
+					var c := image.get_pixel(x, y)
+					var luma := c.r * 0.3 + c.g * 0.59 + c.b * 0.11
+					if c.a <= 0.0 or luma < 0.1:
+						image.set_pixel(x, y, Color(0, 0, 0, 0))
+					else:
+						var grey := clampf(0.3 + luma, 0.0, 1.0)
+						image.set_pixel(x, y, Color(grey, grey, grey, 1.0))
+			icon_cache[key] = ImageTexture.create_from_image(image)
+	return icon_cache[key]
 
 
 ## One glyph at the pen: a new line first when the pen is past the box's width, the glyph's sprite (none for the blank glyph 0).
 func _glyph(code: int) -> void:
-	if _pen.x >= BOX_SIZE.x:
+	if _cut_x >= 0.0:
+		# a list row's name line: the name is cut at the pen's limit, no second line
+		if _pen.x >= _cut_x:
+			return
+	elif _pen.x >= BOX_SIZE.x:
 		_pen = Vector2(0, _pen.y + LINE)
 	if _pen.y + LINE > BOX_SIZE.y:
 		_pen.x += GLYPH_ADVANCE
@@ -212,6 +254,7 @@ func _glyph(code: int) -> void:
 	if code != 0 and code < text.glyphs.size() and int(text.glyphs[code]["sjis"]) != 0:
 		var sprite: Sprite2D = text.sprite_for(code, 0, sharp, true)
 		sprite.position = _pen
+		sprite.modulate = _tint
 		_parent.add_child(sprite)
 	_pen.x += GLYPH_ADVANCE
 
@@ -224,6 +267,7 @@ func _place(texture: Texture2D, at: Vector2) -> void:
 	sprite.texture = texture
 	sprite.material = sharp
 	sprite.position = at
+	sprite.modulate = _tint
 	_parent.add_child(sprite)
 
 
@@ -266,6 +310,26 @@ func _texture(path: String) -> Texture2D:
 		var image := Image.load_from_file(path)
 		icon_cache[path] = ImageTexture.create_from_image(image) if image != null else null
 	return icon_cache[path]
+
+
+## A list row's name line (the Build Deck's chest and deck rows): the text bank string of the row's style (its own layout: the
+## pen to the race icon, the guardian stars, the pen back to the left, then the card's name), drawn into `text_layer` at its origin
+## and cut at 128 pixels (16 glyphs). `tint` darkens a row that is only in the deck.
+func build_row(text_layer: Node2D, id: int, data: Dictionary, bytes: Array, tint := Color(1, 1, 1)) -> void:
+	_clear(text_layer)
+	_parent = text_layer
+	_icons = null
+	_id = id
+	_race = RACE_TYPES.find(str(data.get("type", "")))
+	if _race < 0:
+		_race = 0
+	_stars = [STARS.get(str(data.get("guardian_star_1", "")), 0), STARS.get(str(data.get("guardian_star_2", "")), 0)]
+	_pen = Vector2.ZERO
+	_tint = tint
+	_cut_x = ROW_CUT_X
+	_run(bytes, 0)
+	_cut_x = -1.0
+	_tint = Color(1, 1, 1)
 
 
 func _clear(node: Node) -> void:
