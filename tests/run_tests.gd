@@ -498,7 +498,10 @@ func _test_field_phase() -> void:
 	eng.change_position(1, 0)
 	check("a position change moves the monster to defense", st.sides[1].monsters[0]["defense"] == true)
 	eng.change_position(1, 2)
-	check("a position change turns a face-down monster face up", st.sides[1].monsters[2]["face_down"] == false)
+	check("a position change keeps a face-down monster face down", st.sides[1].monsters[2]["face_down"] == true)
+	check("a position change moves a face-down monster to defense", st.sides[1].monsters[2]["defense"] == true)
+	eng.change_position(1, 2)
+	check("a second position change moves it back to attack", st.sides[1].monsters[2]["defense"] == false)
 	st.sides[1].monsters[4] = zone(eng, 1)
 	st.sides[1].monsters[4]["used"] = true
 	check("a monster that has attacked cannot change position", not eng.can_change_position(1, 4))
@@ -1160,6 +1163,10 @@ func _test_card_viewer() -> void:
 		art.convert(Image.FORMAT_RGBA8)
 		check("the card's corner is the frame's corner", magic.get_pixel(0, 0) == frame.get_pixel(0, 0))
 		check("the picture is laid at (19, 50) of the card", magic.get_pixel(19, 50) == art.get_pixel(0, 0) and magic.get_pixel(60, 90) == art.get_pixel(41, 40))
+	var dark_hole: Image = CardView.card_picture(336, data.card(336), 0, 0, ui)
+	var magic_frame := Image.load_from_file("res://assets/screens/password/card_frame_magic_0.png")
+	check("the duel viewer's Dark Hole (336) is framed: the card's corner is the magic frame's",
+			dark_hole != null and magic_frame != null and dark_hole.get_pixel(0, 0) == magic_frame.get_pixel(0, 0))
 	var monster: Image = CardView.card_picture(5, data.card(5), 1000, 500, ui)
 	var monster_frame := Image.load_from_file("res://assets/screens/password/card_frame_monster_0.png")
 	check("a monster's picture is the whole card, 140 x 196, on the monster frame",

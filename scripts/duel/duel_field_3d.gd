@@ -100,9 +100,9 @@ func setup(host: Node, world: Node2D, sharp: ShaderMaterial, duel_terrain: int) 
 		return false
 	terrain = clampi(duel_terrain, 0, 6)
 	shader_board = Shader.new()
-	shader_board.code = _shader(false)
+	shader_board.code = _board_shader()
 	shader_card = Shader.new()
-	shader_card.code = _shader(true)
+	shader_card.code = _shader()
 	shader_flash = Shader.new()
 	shader_flash.code = "shader_type spatial;\nrender_mode unshaded, cull_disabled, blend_mix;\nuniform vec4 tint : source_color = vec4(1.0);\n" \
 			+ "void fragment() {\n\tALBEDO = tint.rgb;\n\tALPHA = tint.a;\n}\n"
@@ -219,38 +219,48 @@ static func _fog_constants(near: int, far: int, h: int) -> Vector2i:
 	return Vector2i(dqa, dqb)
 
 
-func _shader(cards_too: bool) -> String:
+func _shader() -> String:
 	var fog_k := _fog_constants(650, 800, int(layout["projection"]))
 	var code := "shader_type spatial;\nrender_mode unshaded, cull_disabled;\nuniform sampler2D albedo_texture : filter_nearest;\n"
+	code += "uniform vec4 flip_tint : source_color = vec4(1.0);\n"
 	code += "varying float fog;\n"
-	# the console's 4 x 4 ordered dither, indexed by the screen pixel's row and column (modulo 4)
-	code += "const float DITHER[16] = float[16](-4.0, 0.0, -3.0, 1.0, 2.0, -2.0, 3.0, -1.0, -3.0, 1.0, -4.0, 0.0, 3.0, -1.0, 2.0, -2.0);\n"
 	code += "const float H = %d.0;\nconst float DQA = %d.0;\nconst float DQB = %d.0;\n" % [int(layout["projection"]), fog_k.x, fog_k.y]
 	code += "void vertex() {\n\tfloat sz = max(-(MODELVIEW_MATRIX * vec4(VERTEX, 1.0)).z, 1.0);\n"
 	code += "\tfloat mac0 = (H * 65536.0 / sz) * DQA + DQB;\n\tfog = clamp(mac0 / 4096.0, 0.0, 4096.0) / 4096.0;\n}\n"
 	code += "void fragment() {\n\tvec4 c = texture(albedo_texture, UV);\n"
-	var tint := ""
-	if not cards_too:
-		code = code.replace("uniform sampler2D albedo_texture : filter_nearest;\n", "uniform sampler2D albedo_texture : filter_nearest;\nuniform vec4 board_tint : source_color = vec4(1.0);\nuniform float dither_px = 1.0;\n")
-		tint = " * board_tint.rgb"
-	if cards_too:
-		code = code.replace("uniform sampler2D albedo_texture : filter_nearest;\n", "uniform sampler2D albedo_texture : filter_nearest;\nuniform vec4 flip_tint : source_color = vec4(1.0);\n")
-		code += "\tif (c.a < 0.5) { discard; }\n"
-		tint = " * flip_tint.rgb"      # the flip's colour pulse (a card turning over, see _animate)
-	# the board is not depth-cued in the reference frame (its far rows stay bright, measured on the real 2P screen): only the cards take the fog
-	# the board's colour is stored halved (see _build_board): doubled here; the cards' own colour is white and stays as it is
-	if cards_too:
-		code += "\tALBEDO = c.rgb * COLOR.rgb" + tint + " * (1.0 - fog);\n}\n"
-	else:
-		# the board is drawn the way the console draws a dithered textured polygon: the texel (8 bits) times the lit factor
-		# (COLOR * 2, times the board tint), truncated; the 4 x 4 ordered dither added at the screen pixel (FRAGCOORD); the sum
-		# clamped and cut to five bits a channel. Every textured board polygon of the reference has its dither on.
-		code += "\tvec3 t8 = floor(c.rgb * 255.0 + 0.5);\n"
-		code += "\tvec3 f8 = floor(t8 * COLOR.rgb * 2.0" + tint + ");\n"
-		# the pixel of the 320 x 240 picture (the field viewport is view_scale times that size: dither_px is the scale)
-		code += "\tfloat dd = DITHER[(int(mod(floor(FRAGCOORD.y / dither_px), 4.0)) * 4) + int(mod(floor(FRAGCOORD.x / dither_px), 4.0))];\n"
-		code += "\tvec3 q = floor(clamp(f8 + vec3(dd), 0.0, 255.0) / 8.0) * 8.0;\n"
-		code += "\tALBEDO = q / 255.0 * (1.0 - fog);\n}\n"
+	code += "\tif (c.a < 0.5) { discard; }\n"
+	code += "\tALBEDO = c.rgb * COLOR.rgb * flip_tint.rgb * (1.0 - fog);\n}\n"
+	return code
+
+
+## The board's shader: a textured polygon drawn the way the console's GPU rasterises it. Texture coordinates and the lit colour are
+## interpolated affinely in screen space (no perspective correction): each varying is sent multiplied by the vertex depth w, and the
+## fragment divides the interpolated product by the interpolated w, which is the screen-linear value. The vertex is snapped to the
+## whole picture pixel grid (the GTE's screen coordinates are whole numbers); texels are fetched at whole coordinates. The colour is
+## the texel times the lit factor, with the 4 x 4 ordered dither at the screen pixel, cut to five bits a channel.
+func _board_shader() -> String:
+	var code := "shader_type spatial;\nrender_mode unshaded, cull_disabled;\nuniform sampler2D albedo_texture : filter_nearest;\n"
+	code += "uniform vec4 board_tint : source_color = vec4(1.0);\nuniform float dither_px = 1.0;\n"
+	code += "uniform vec2 view_size = vec2(320.0, 264.0);\nuniform float snap = 1.0;\nuniform vec2 screen_shift = vec2(0.0);\n"
+	code += "varying vec2 tex_w;\nvarying vec3 col_w;\nvarying float depth_w;\n"
+	code += "const float DITHER[16] = float[16](-4.0, 0.0, -3.0, 1.0, 2.0, -2.0, 3.0, -1.0, -3.0, 1.0, -4.0, 0.0, 3.0, -1.0, 2.0, -2.0);\n"
+	code += "void vertex() {\n\tvec4 clip = PROJECTION_MATRIX * (MODELVIEW_MATRIX * vec4(VERTEX, 1.0));\n"
+	code += "\tvec2 ndc = clip.xy / clip.w;\n"
+	code += "\tvec2 pp = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * view_size;\n\tpp += screen_shift;\n"
+	code += "\tpp = mix(pp, floor(pp + 0.5) + 0.5, snap);\n"
+	code += "\tPOSITION = vec4((vec2(pp.x / view_size.x, 1.0 - pp.y / view_size.y) * 2.0 - 1.0) * clip.w, clip.z, clip.w);\n"
+	code += "\ttex_w = (UV * 256.0 - 0.5) * clip.w;\n\tcol_w = COLOR.rgb * clip.w;\n\tdepth_w = clip.w;\n}\n"
+	code += "void fragment() {\n\tvec2 tc = tex_w / depth_w;\n"
+	code += "\tivec2 size = textureSize(albedo_texture, 0);\n"
+	code += "\tivec2 ti = clamp(ivec2(floor(tc + 0.5)), ivec2(0), size - ivec2(1));\n"
+	code += "\tvec4 c = texelFetch(albedo_texture, ti, 0);\n"
+	code += "\tif (c.a < 0.5) { discard; }\n"
+	code += "\tvec3 lit = col_w / depth_w;\n"
+	code += "\tvec3 t8 = floor(c.rgb * 255.0 + 0.5);\n"
+	code += "\tvec3 f8 = floor(t8 * lit * 2.0 * board_tint.rgb);\n"
+	code += "\tfloat dd = DITHER[(int(mod(floor(FRAGCOORD.y / dither_px), 4.0)) * 4) + int(mod(floor(FRAGCOORD.x / dither_px), 4.0))];\n"
+	code += "\tvec3 q = floor(clamp(f8 + vec3(dd), 0.0, 255.0) / 8.0) * 8.0;\n"
+	code += "\tALBEDO = q / 255.0;\n}\n"
 	return code
 
 
@@ -484,6 +494,7 @@ func project(point: Vector3) -> Vector2:
 ## The field's internal resolution: the board is drawn at view_scale times the 320 x 264 picture (the same projection, the same
 ## geometry), so its edges stay sharp at window sizes; the picture's own texels keep their nearest look. The sprite shows the viewport
 ## at 1 / view_scale. The scale is kept to 1..VIEW_SCALE_MAX (the web build stays small).
+const BOARD_SHIFT := Vector2(1.0, 1.0)   # the board is drawn one picture pixel right and down of the GTE grid as measured on the settled reference frame (the grid lines then match)
 const VIEW_SCALE_MAX := 4
 var view_scale := 1
 
@@ -497,6 +508,9 @@ func set_view_scale(k: int) -> void:
 	screen.scale = Vector2(1.0 / k, 1.0 / k)
 	for material in board_materials:
 		(material as ShaderMaterial).set_shader_parameter("dither_px", float(k))
+		(material as ShaderMaterial).set_shader_parameter("view_size", Vector2(320.0 * k, float(VIEW_HEIGHT * k)))
+		(material as ShaderMaterial).set_shader_parameter("snap", 1.0 if k == 1 else 0.0)
+		(material as ShaderMaterial).set_shader_parameter("screen_shift", BOARD_SHIFT * k)
 
 
 ## The screen box of a card on its slot, as the box of its four corners at the height a card on the field hangs at.
@@ -834,6 +848,9 @@ func _build_board(folder: String) -> bool:
 		material.shader = shader_board
 		material.set_shader_parameter("board_tint", Color(board_tint.x / 128.0, board_tint.y / 128.0, board_tint.z / 128.0))
 		material.set_shader_parameter("dither_px", float(view_scale))
+		material.set_shader_parameter("view_size", Vector2(320.0, float(VIEW_HEIGHT)))
+		material.set_shader_parameter("snap", 1.0)
+		material.set_shader_parameter("screen_shift", BOARD_SHIFT)
 		board_materials.append(material)
 		var image := Image.load_from_file(folder + "texture_%d.png" % i)
 		if image != null:

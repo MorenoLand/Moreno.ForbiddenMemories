@@ -405,11 +405,12 @@ func can_change_position(p: int, zone_index: int) -> bool:
 	return zone != null and not zone["used"]
 
 
+## The position change turns the monster between attack and defence only: a face-down monster stays face down (reference: the L1 toggle
+## sets the defence bit and keeps the face-down bit).
 func change_position(p: int, zone_index: int) -> void:
 	var zone = state.sides[p].monsters[zone_index]
 	if zone != null:
 		zone["defense"] = not zone["defense"]
-		zone["face_down"] = false
 
 
 ## the guardian star matchup: +-500 for the attacker's star against the defender's.
