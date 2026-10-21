@@ -1065,8 +1065,8 @@ func _terrain(value: int) -> void:
 	# the terrain change (effect 10 at the card's variant): the FIELD box shows the new terrain once the program's impact has landed
 	# (the game sets the terrain when its package has loaded, the same point the program's own stage signal follows)
 	var lead := func() -> void:
-		pass                            # the program starts 12 frames after the window's fade (its first light then shows at the reference's ~+110)
-	_beat(lead, 12)
+		pass                            # the program starts 6 frames after the window's fade (its first light then shows at the reference's ~+110)
+	_beat(lead, 6)
 	var change := func() -> void:
 		var show_plate := func() -> void:
 			if field != null:
