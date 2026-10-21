@@ -153,6 +153,12 @@ const STAR_CARD_AT := Vector2(134, 42)    # where the placed card waits while th
 var zone_art: Dictionary = {}             # zone_cursor.json's streams: "0" to "7" (the zone cursor's frames and play order)
 var hand_art: Dictionary = {}             # hand/layout.json: "pointer" (a stream) and "badges" (one picture per pick)
 var anim_tick := 0                        # the cursors' animation clock (one a physics frame)
+var zone_clock := 0                       # the zone cursor's own clock: it starts when the cursor appears (one a physics frame)
+var zone_shown := false                   # whether the zone cursor was on the board in the last draw
+var pointer_clock := 0                    # the hand pointer's own clock: it starts when the pointer appears (one a physics frame)
+var pointer_shown := false                # whether the hand pointer was on the board in the last draw
+const POINTER_PHASE := 2                  # the reference's pointer starts 2 ticks into its 4-tick hold (the first frame of its stream is the big one)
+const ZONE_PHASE := 5                     # the reference's zone cursor starts 5 ticks into its palette stream: its first frame is the stream's last tick of the first hold
 var zone_sprite: Sprite2D = null          # the zone cursor on the board, animated by _animate_cursors
 var zone_track := {}                      # its stream and origin
 var pointer_sprite: Sprite2D = null       # the hand pointer on the board
@@ -506,13 +512,20 @@ func _draw_art_cursor() -> bool:
 	_load_cursor_art()
 	zone_sprite = null
 	pointer_sprite = null
-	if mode == "hand" and not hand_art.is_empty() and engine.state.sides[0].hand.size() > 0:
+	# the hand pointer shows in the hand mode, and in the destination mode under the chosen card's slot (the reference's draw list)
+	var pointer_here: bool = mode in ["hand", "dest"] and not hand_art.is_empty() and engine.state.sides[0].hand.size() > 0
+	if pointer_here:
+		if not pointer_shown:
+			pointer_clock = 0               # the pointer appears: its stream starts again
+		pointer_shown = true
 		pointer_sprite = _hand_pointer(hand_index)
+	else:
+		pointer_shown = false
+	if mode == "hand" and pointer_here:
+		zone_shown = false
 		return pointer_sprite.texture != null
-	if mode == "dest" and not hand_art.is_empty() and engine.state.sides[0].hand.size() > 0:
-		# the chosen card stays in its slot while it is placed: the red pointer keeps its place under the slot (the reference's draw list)
-		_hand_pointer(hand_index)
 	if field == null or zone_art.is_empty() or not (mode in ["dest", "field", "target", "equip_pick", "prompt"]):
+		zone_shown = false
 		return false
 	var side := 1 if mode == "target" else 0
 	var row := "monsters" if mode == "target" else _cursor_row()
@@ -520,8 +533,11 @@ func _draw_art_cursor() -> bool:
 	var k := side * 4                       # the table index plus 4 for the foe (the zone cursor's streams 0 to 3 and 4 to 7)
 	var entry: Dictionary = zone_art.get(str(k), {})
 	var origin: Vector2 = field.cell_point(record) - ZONE_ORIGIN
+	if not zone_shown:
+		zone_clock = 0                      # the cursor appears: its palette stream starts again
+	zone_shown = true
 	zone_track = {"entry": entry, "folder": FIELD_ART, "at": origin}
-	zone_sprite = _cursor_sprite(FIELD_ART, _stream_frame(entry, anim_tick), origin)
+	zone_sprite = _cursor_sprite(FIELD_ART, _stream_frame(entry, zone_clock + ZONE_PHASE), origin)
 	return zone_sprite.texture != null
 
 
@@ -689,18 +705,15 @@ func _set_frame(sprite: Sprite2D, folder: String, frame: Dictionary, origin: Vec
 		ModArt.apply(sprite, art)
 
 
-## The red hand pointer under hand slot i: the reference draws it as one 16 x 16 picture (pointer.png, mirrored so its tip points into the
-## card), at (6, 186) for slot 0, that is the slot's (14, 194) less 8 on each side. It does not animate in the reference's frames.
-const HAND_POINTER := "res://assets/screens/duel_hand/pointer.png"
-
-
+## The red hand pointer under hand slot i: the baked pointer stream (layout.json's pointer: eight pictures, a hold of four each, the
+## triangle shortening to a thin bar and back). Its origin is the slot's place at POINTER_Y, and each frame carries its own offset.
 func _hand_pointer(i: int) -> Sprite2D:
 	var sprite := Sprite2D.new()
 	sprite.centered = false
-	ModArt.apply(sprite, _art(HAND_POINTER))      # the picture's own size and scale (the art record), as the other pieces are drawn
-	sprite.flip_h = true
-	sprite.position = Vector2(DuelHand.place(i).x - 8.0, 186.0)
 	sprite.material = sharp
+	var origin := Vector2(DuelHand.place(i).x, POINTER_Y)
+	pointer_track = {"at": origin}
+	_set_frame(sprite, HAND_ART, _stream_frame(hand_art.get("pointer", {}), pointer_clock + POINTER_PHASE), origin)
 	board.add_child(sprite)
 	return sprite
 
@@ -708,8 +721,14 @@ func _hand_pointer(i: int) -> Sprite2D:
 ## Each physics frame: the cursors' clock moves on and the zone cursor and the hand pointer show their next frame.
 func _animate_cursors() -> void:
 	anim_tick += 1
+	if pointer_shown:
+		pointer_clock += 1
+		if pointer_sprite != null and is_instance_valid(pointer_sprite) and not pointer_track.is_empty():
+			_set_frame(pointer_sprite, HAND_ART, _stream_frame(hand_art.get("pointer", {}), pointer_clock + POINTER_PHASE), pointer_track["at"])
+	if zone_shown:
+		zone_clock += 1
 	if zone_sprite != null and is_instance_valid(zone_sprite) and not zone_track.is_empty():
-		_set_frame(zone_sprite, zone_track["folder"], _stream_frame(zone_track["entry"], anim_tick), zone_track["at"])
+		_set_frame(zone_sprite, zone_track["folder"], _stream_frame(zone_track["entry"], zone_clock + ZONE_PHASE), zone_track["at"])
 
 
 ## The activation prompt under the magic or trap card: YES and NO in the game's letters, the choice's bar behind the selected one.
@@ -1159,6 +1178,15 @@ func _edge(name: String, keys: Array) -> bool:
 	return now and not was
 
 
+## L1 (the pad's left shoulder, or Z on the keyboard and the touch pill): the field's position change, as the reference's L1 is
+## (its PC keymap has L1 on Q; Q is our Back). The same bindings as the menus' L1 (build_deck.gd, library.gd).
+func _l1_edge() -> bool:
+	var now := Input.is_key_pressed(KEY_Z) or Input.is_joy_button_pressed(0, JOY_BUTTON_LEFT_SHOULDER)
+	var was: bool = held.get("l1", false)
+	held["l1"] = now
+	return now and not was
+
+
 func _physics_process(_delta: float) -> void:
 	if not ready_ok:
 		return
@@ -1199,6 +1227,7 @@ func _physics_process(_delta: float) -> void:
 	var cancel := _edge("cancel", [KEY_Q, KEY_ESCAPE, KEY_BACKSPACE])
 	var mark := _edge("mark", [KEY_F])
 	var flip := _edge("flip", [KEY_R])
+	var l1 := _l1_edge()
 	var start := _edge("start", [KEY_ENTER])
 	var up := _edge("up", [KEY_UP, KEY_W])
 	var down := _edge("down", [KEY_DOWN, KEY_S])
@@ -1310,9 +1339,9 @@ func _physics_process(_delta: float) -> void:
 				elif start:
 					_end_turn()
 			else:
-				if flip and engine.can_change_position(0, zone_index):
+				if (flip or l1) and engine.can_change_position(0, zone_index):
 					engine.change_position(0, zone_index)
-				elif flip:
+				elif flip or l1:
 					_refuse(DuelHelp.change_reason(engine, zone_index))
 				if confirm and engine.can_attack(0, zone_index):
 					attacker = zone_index

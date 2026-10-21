@@ -1893,9 +1893,6 @@ def bake_duel_numbers(wa: bytes, exe: bytes, output: Path) -> int:
         for i in range(16):
             mirrored[(j * 16 + i) * 4:(j * 16 + i) * 4 + 4] = arrow[(j * 16 + (15 - i)) * 4:(j * 16 + (15 - i)) * 4 + 4]
     written += bool(write_output(output / "duel_card" / "arrow_left.png", png(16, 16, bytes(mirrored)), output))
-    # the hand pointer, as the reference draws it in the destination state (one 16 x 16 quad on the same page and palette, uv 15 to 31 at
-    # rows 144 to 160, mirrored: its tip points into the card). Unmirrored cell written; the scene flips it.
-    written += bool(write_output(output / "duel_hand" / "pointer.png", png(16, 16, cut4(15, 144, 16, 16, 544, 252, 704, 0)), output))
     return written
 
 
