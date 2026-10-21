@@ -11,6 +11,8 @@ const GameStateScript := preload("res://scripts/state/game_state.gd")
 var scen := "magic"
 var out_dir := "user://fx"
 var every := 8
+var seq_every := 0      # > 0: while a sequence plays the picture is saved every seq_every ticks (its own clock: fx sequence_t)
+var board_dump := false
 var duel
 var pf_last := -1
 var capturing := false
@@ -30,6 +32,7 @@ const SCENES := {
 	"fusion": {"deck": [2, 8, 5, 6, 7, 9, 10, 11], "hand": [2, 8, 5, 6, 7]},
 	"ritual": {"deck": [1, 1, 1, 675, 5, 6, 7, 8, 9, 10], "hand": [1, 1, 1, 675, 5]},
 	"faceup": {"deck": [4, 315, 5, 6, 7, 8, 9, 10], "hand": [4, 315, 5, 6, 7]},
+	"faceup_hand": {"deck": [4, 315, 5, 6, 7, 8, 9, 10], "hand": [4, 315, 5, 6, 7]},
 	"hand_magic": {"deck": [5, 330, 4, 6, 7, 8, 9, 10], "hand": [5, 330, 4, 6, 7]},
 	"hand_equip": {"deck": [4, 315, 5, 6, 7, 8, 9, 10], "hand": [4, 315, 5, 6, 7]},
 	"hand_trap": {"deck": [5, 681, 4, 6, 7, 8, 9, 10], "hand": [5, 681, 4, 6, 7]},
@@ -64,6 +67,10 @@ func _initialize() -> void:
 			out_dir = arg.substr(6)
 		elif arg.begins_with("--every="):
 			every = int(arg.substr(8))
+		elif arg.begins_with("--seq_every="):
+			seq_every = int(arg.substr(12))
+		elif arg == "--board=1":
+			board_dump = true
 	DirAccess.make_dir_recursive_absolute(out_dir)
 	log_file = FileAccess.open(out_dir.path_join("log.txt"), FileAccess.WRITE)
 	GameStateScript.deck = SCENES[scen]["deck"].duplicate()
@@ -128,10 +135,35 @@ func _script() -> Array:
 			# the monster face up at the first zone (right, cross, cross as the reference plays it), then the settled picture
 			s += [["cap", false], ["move_to", 4], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E],
 				["until_mode", "dest"], ["key", KEY_E], ["wait", 4], ["star_press"], ["until_idle"], ["wait", 400], ["cap", true], ["wait", 16], ["cap", false]]
+		"faceup_hand":
+			# the faceup picture, then the turn ends and the hand view is back: the picture of the hand view with the monster on the field
+			s += [["cap", false], ["move_to", 4], ["key", KEY_E], ["until_mode", "centre"], ["wait", 14], ["key", KEY_D], ["wait", 3], ["key", KEY_E],
+				["until_mode", "dest"], ["key", KEY_E], ["wait", 4], ["star_press"], ["until_idle"], ["wait", 400],
+				["end_turn"], ["until_hand"], ["wait", 400], ["cap", true], ["wait", 16], ["cap", false]]
 		"fusion":
 			s += [["move_to", 2], ["key", KEY_F], ["wait", 6], ["move_to", 8], ["key", KEY_F], ["wait", 6], ["key", KEY_E],
 				["wait", 20], ["key", KEY_E], ["wait", 40], ["key", KEY_E], ["wait", 40], ["key", KEY_E], ["wait", 360]]
 	return s
+
+
+## The board's vertices as the picture draws them before the snap: each surface's vertex and texel per corner, with the screen point
+## (picture pixels, the field's projection minus its SHIFT), written as board_<pf>.json.
+func _dump_board(pf: int) -> void:
+	var field = duel.field
+	var rows: Array = []
+	for child in field.board.get_children():
+		var mesh: Mesh = (child as MeshInstance3D).mesh
+		for i in mesh.get_surface_count():
+			var arrays := mesh.surface_get_arrays(i)
+			var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var uvs: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+			for k in verts.size():
+				var p: Vector2 = field.camera.unproject_position(verts[k]) - Vector2(0.0, 24.0)
+				rows.append([i, k, p.x, p.y, uvs[k].x * 256.0 - 0.5, uvs[k].y * 256.0 - 0.5, verts[k].x, verts[k].y, verts[k].z])
+	rows.append(["board_transform", str(field.board.global_transform), "camera", str(field.camera.global_transform), "fov", field.camera.fov, "size", str(field.viewport.size)])
+	var f := FileAccess.open(out_dir.path_join("board_%05d.json" % pf), FileAccess.WRITE)
+	f.store_string(JSON.stringify(rows))
+	f.close()
 
 
 func _busy() -> bool:
@@ -144,6 +176,8 @@ func _snap() -> void:
 	var pf := Engine.get_physics_frames()
 	var name := "f%05d.png" % pf
 	img.save_png(out_dir.path_join(name))
+	if board_dump:
+		_dump_board(pf)
 	var s = duel.engine.state
 	var hand: Array = []
 	for c in s.sides[0].hand:
@@ -160,8 +194,10 @@ func _snap() -> void:
 	var f1s: Array = []
 	for z in s.sides[1].traps:
 		f1s.append(z["id"] if z != null else null)
-	_log("%s pf=%d mode=%s timer=%d busy=%s turn=%d hand=%s m0=%s s0=%s s1=%s lp=%d,%d star=%d m1=%s" % [name, pf, duel.mode, duel.timer, str(_busy()),
+	_log("%s pf=%d seq=%d mode=%s timer=%d busy=%s turn=%d hand=%s m0=%s s0=%s s1=%s lp=%d,%d star=%d m1=%s" % [name, pf, duel.fx.sequence_t, duel.mode, duel.timer, str(_busy()),
 		s.turn_side, str(hand), str(f0), str(f0s), str(f1s), s.sides[0].lp, s.sides[1].lp, duel.star_zone, str(f1)])
+	if duel.field != null:
+		_log("  view near=%s cam=%s cam_to=%s view_side=%d target_z=%s cam_left=%d battle_view=%s view_hold=%s busy=%s hides_hand=%s foe_turn=%s" % [str(duel.field.near), str(duel.field.cam), str(duel.field.cam_to), duel.field.view_side, str(duel.field.target_z), duel.field.cam_left, str(duel.fx.battle_view), str(duel.fx.view_hold), str(duel.fx.busy()), str(duel.fx.hides_hand()), str(duel.mode == "foe")])
 	if DEBUG_FX:
 		_log("  fx %s" % duel.fx.debug_state())
 		for entry in duel.fx.programs:
@@ -193,7 +229,8 @@ func _on_tick() -> void:
 		duel.refresh()
 		_log("hand set: %s" % str(duel.engine.state.sides[0].hand))
 	var pf := Engine.get_physics_frames()
-	if capturing and pf % every == 0 and pf != pf_last:
+	var seq_tick: bool = seq_every > 0 and duel.fx.active and duel.fx.sequence_t % seq_every == 0
+	if capturing and (pf % every == 0 or seq_tick) and pf != pf_last:
 		pf_last = pf
 		_snap()
 	if step_left > 0:

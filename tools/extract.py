@@ -1921,6 +1921,27 @@ def bake_duel_bar_icons(wa: bytes, output: Path) -> int:
     return written
 
 
+DUEL_ATTRIBUTE_CELLS = {"light": (144, 64), "dark": (160, 48), "earth": (144, 48), "fire": (128, 48), "wind": (176, 48), "water": (208, 48)}
+
+
+def bake_duel_attribute_icons(wa: bytes, output: Path) -> int:
+    """The attribute symbols of the card bar (the field's hovered monster: the icon at x 279, beside the race icon): 16 x 16 cells at
+    page 11 (VRAM x 704, y 0), 4 bits a texel, CLUT (640, 250); the cell per attribute is DUEL_ATTRIBUTE_CELLS (read from the reference
+    game's primitive trace of a face-up monster of each attribute). Written as duel_bar/attr_<name>.png, index 0 transparent."""
+    vram = _icon_vram(wa)
+    written = 0
+    for name, (u, v) in DUEL_ATTRIBUTE_CELLS.items():
+        out = bytearray(16 * 16 * 4)
+        for j in range(16):
+            for i in range(16):
+                index = vram.texel4(STAR_ICON_PAGE * 64, 0, u + i, v + j)
+                colour = vram.colour(640, 250, index) if index else 0
+                if colour:
+                    out[(j * 16 + i) * 4:(j * 16 + i) * 4 + 4] = rgba(colour)
+        written += bool(write_output(output / "duel_bar" / f"attr_{name}.png", png(16, 16, bytes(out)), output))
+    return written
+
+
 def bake_duel_band(wa: bytes, exe: bytes, output: Path) -> int:
     """The duel's information band as a 256 x 256 texture page (4 bits a texel, CLUT row 240): duel_frame/band_page.png, and
     duel_frame/band.json with the band's pieces (rectangles and quads with their texel corners), in screen units (320 x 240)."""
@@ -4150,7 +4171,7 @@ def main():
     if "images" in chosen:
         print(f"  images: {export_images({'WA_MRG.MRG': wa}, out / 'images', mods=mods)}")
     if "screens" in chosen:
-        print(f"  screens: {bake(wa, out / 'screens') + bake_menu(su, out / 'screens') + bake_name_entry(wa, exe, out / 'screens') + bake_options(wa, su, exe, out / 'screens') + bake_story(wa, exe, out / 'screens') + bake_story_scenes(wa, exe, out / 'screens') + bake_dialog_arrow(wa, exe, out / 'screens') + bake_card_frame(wa, exe, out / 'screens') +bake_library(wa, out / 'screens') + bake_library2(wa, exe, out / 'screens') + bake_free_duel(wa, out / 'screens') + bake_map(wa, out / 'screens') + bake_busts(wa, out / 'screens') + bake_duel_result(wa, exe, out / 'screens') + bake_logo(wa, out / 'screens') + bake_build_deck(wa, exe, out / 'screens') + bake_credits(wa, su, exe, out / 'screens') + bake_game_over(wa, out / 'screens') + bake_duel_field(wa, exe, out / 'screens') + bake_duel_card_face(wa, out / 'screens') + bake_duel_plate(wa, exe, out / 'screens') + bake_password(wa, exe, su, out / 'screens') + bake_card_ui(wa, out / 'screens') + bake_backdrops(wa, exe, out / 'screens') + bake_rules(wa, su, out / 'screens') + bake_duel_hud(wa, exe, out / 'screens') + bake_star_icons(wa, exe, out / 'screens') + bake_race_icons(wa, exe, out / 'screens') + bake_button_glyphs(wa, out / 'screens') + bake_duel_cursors(wa, exe, out / 'screens') + bake_duel_band(wa, exe, out / 'screens') + bake_duel_numbers(wa, exe, out / 'screens') + bake_duel_effect_textures(wa, out / 'screens') + bake_duel_bar_icons(wa, out / 'screens') + bake_credits_monsters(mrg, out / 'screens')}")
+        print(f"  screens: {bake(wa, out / 'screens') + bake_menu(su, out / 'screens') + bake_name_entry(wa, exe, out / 'screens') + bake_options(wa, su, exe, out / 'screens') + bake_story(wa, exe, out / 'screens') + bake_story_scenes(wa, exe, out / 'screens') + bake_dialog_arrow(wa, exe, out / 'screens') + bake_card_frame(wa, exe, out / 'screens') +bake_library(wa, out / 'screens') + bake_library2(wa, exe, out / 'screens') + bake_free_duel(wa, out / 'screens') + bake_map(wa, out / 'screens') + bake_busts(wa, out / 'screens') + bake_duel_result(wa, exe, out / 'screens') + bake_logo(wa, out / 'screens') + bake_build_deck(wa, exe, out / 'screens') + bake_credits(wa, su, exe, out / 'screens') + bake_game_over(wa, out / 'screens') + bake_duel_field(wa, exe, out / 'screens') + bake_duel_card_face(wa, out / 'screens') + bake_duel_plate(wa, exe, out / 'screens') + bake_password(wa, exe, su, out / 'screens') + bake_card_ui(wa, out / 'screens') + bake_backdrops(wa, exe, out / 'screens') + bake_rules(wa, su, out / 'screens') + bake_duel_hud(wa, exe, out / 'screens') + bake_star_icons(wa, exe, out / 'screens') + bake_race_icons(wa, exe, out / 'screens') + bake_button_glyphs(wa, out / 'screens') + bake_duel_cursors(wa, exe, out / 'screens') + bake_duel_band(wa, exe, out / 'screens') + bake_duel_numbers(wa, exe, out / 'screens') + bake_duel_effect_textures(wa, out / 'screens') + bake_duel_bar_icons(wa, out / 'screens') + bake_duel_attribute_icons(wa, out / 'screens') + bake_credits_monsters(mrg, out / 'screens')}")
     if "text" in chosen:
         print(f"  text: {export_text(wa, exe, out / 'screens')}")
     if "audio" in chosen:

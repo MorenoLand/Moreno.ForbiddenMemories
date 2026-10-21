@@ -30,6 +30,7 @@ const NEAR_DISTANCE := 334.0         # the field view (the routine at 0x800178BC
 const NEAR_ELEVATION := 1022.0
 const FAR_DISTANCE := 600.0          # the hand view (the startup's end and the turn switch)
 const FAR_ELEVATION := 256.0
+const HAND_MONSTER_TINT := 0.75     # a face-up monster on the field in the hand view: colour 96 of 128 (the reference's 3D quad)
 const VIEW_FRAMES := 16              # frames for the field view to ease in or out (the routine at 0x80022D94 with 16)
 const TURN_FRAMES := 48              # frames for the turn swing (the turn switch state)
 const INTRO_FRAMES := 300            # the opening sweep (the startup state's 300 frames)
@@ -222,14 +223,14 @@ static func _fog_constants(near: int, far: int, h: int) -> Vector2i:
 func _shader() -> String:
 	var fog_k := _fog_constants(650, 800, int(layout["projection"]))
 	var code := "shader_type spatial;\nrender_mode unshaded, cull_disabled;\nuniform sampler2D albedo_texture : filter_nearest;\n"
-	code += "uniform vec4 flip_tint : source_color = vec4(1.0);\n"
+	code += "uniform vec4 flip_tint : source_color = vec4(1.0);\nuniform vec4 hand_tint : source_color = vec4(1.0);\n"
 	code += "varying float fog;\n"
 	code += "const float H = %d.0;\nconst float DQA = %d.0;\nconst float DQB = %d.0;\n" % [int(layout["projection"]), fog_k.x, fog_k.y]
 	code += "void vertex() {\n\tfloat sz = max(-(MODELVIEW_MATRIX * vec4(VERTEX, 1.0)).z, 1.0);\n"
 	code += "\tfloat mac0 = (H * 65536.0 / sz) * DQA + DQB;\n\tfog = clamp(mac0 / 4096.0, 0.0, 4096.0) / 4096.0;\n}\n"
 	code += "void fragment() {\n\tvec4 c = texture(albedo_texture, UV);\n"
 	code += "\tif (c.a < 0.5) { discard; }\n"
-	code += "\tALBEDO = c.rgb * COLOR.rgb * flip_tint.rgb * (1.0 - fog);\n}\n"
+	code += "\tALBEDO = c.rgb * COLOR.rgb * flip_tint.rgb * hand_tint.rgb * (1.0 - fog);\n}\n"
 	return code
 
 
@@ -328,6 +329,10 @@ func show_near(on: bool) -> void:
 	if on == near:
 		return
 	near = on
+	if not on:
+		# the hand view's reference point is the board's centre row (z 0), as at the deal: the row of the last focus is not kept
+		focused = -1
+		target_z = 0.0
 	_retarget(VIEW_FRAMES)
 
 
@@ -335,6 +340,12 @@ func show_near(on: bool) -> void:
 ## for the row the view is already on does nothing, so this can be called every frame.
 func focus(side: int, record: int, frames := TWEEN_FRAMES) -> void:
 	set_view_side(side, 0)
+	if not near:
+		# the hand view keeps its reference point on the board's centre row (z 0): a row is only focused in the field view
+		focused = -1
+		target_z = 0.0
+		_retarget(frames)
+		return
 	var slot := slot_of(record)
 	if slot < 0 or slot / 5 == focused:
 		return
@@ -557,7 +568,7 @@ func set_cards(entries: Array) -> void:
 				_start_turn(turning, -90.0 if defense else 90.0)
 			if old["texture"] != texture:
 				_start_flip(turning, texture)
-			nodes[record] = {"node": turning, "key": key, "side": view_side, "texture": texture, "defense": defense}
+			nodes[record] = {"node": turning, "key": key, "side": view_side, "texture": texture, "defense": defense, "dim_in_hand": bool(entry.get("dim_in_hand", false))}
 			continue
 		var fresh := not nodes.has(record)
 		if not fresh:
@@ -573,7 +584,7 @@ func set_cards(entries: Array) -> void:
 			turn += 180.0
 		node.rotation_degrees = Vector3(0.0, turn, 0.0)
 		cards.add_child(node)
-		nodes[record] = {"node": node, "key": key, "side": view_side, "texture": texture, "defense": defense}
+		nodes[record] = {"node": node, "key": key, "side": view_side, "texture": texture, "defense": defense, "dim_in_hand": bool(entry.get("dim_in_hand", false))}
 		_place(record, node, fresh)
 	for record in nodes.keys():
 		if not wanted.has(record):
@@ -644,6 +655,9 @@ func _place_sprites() -> void:
 		var sprite: Sprite2D = sprites[record]
 		var flying := flights.has(record)
 		node.layers = 0 if (flat or flying) else 1
+		# the hand view draws a face-up monster of the field dimmed (the reference's 3D quad at 96 of 128: its colour modulation)
+		var dim: float = HAND_MONSTER_TINT if (not near and bool(entry.get("dim_in_hand", false))) else 1.0
+		(node.mesh as ArrayMesh).surface_get_material(0).set_shader_parameter("hand_tint", Color(dim, dim, dim))
 		sprite.visible = flat and node.visible and entry["texture"] != null and not flying
 		if not sprite.visible:
 			continue

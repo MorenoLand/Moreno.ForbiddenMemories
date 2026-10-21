@@ -353,7 +353,7 @@ func _field_cards() -> Array:
 					continue
 				out.append({"record": _record(side, row, i), "texture": _field_face(int(cell["id"]), cell, row), "back": _centre_face(int(cell["id"]), int(cell.get("slot", 0))) if side == 0 else _back(int(cell["id"]), row),
 						"face_down": bool(cell.get("face_down", false)), "defense": bool(cell.get("defense", false)),
-						"foe": side == 1})
+						"foe": side == 1, "dim_in_hand": row == "monsters" and not bool(cell.get("face_down", false))})
 	return out
 
 
@@ -372,7 +372,9 @@ func _draw_foe_hand() -> void:
 func _focus_camera(frames := 8) -> void:
 	if fx != null and (fx.battle_view or fx.view_hold):
 		return                      # the battle's view (duel_fx.gd): the hand view until the battle's presentation has played, or the pan to a trap
-	field.show_near(mode in ["dest", "field", "target", "equip_pick", "prompt"])   # the field view while a monster cursor is on the board, the hand view otherwise
+	# the field view while a monster cursor is on the board, the hand view otherwise; the hand view holds while a presentation plays
+	# (the reference keeps its far view through a magic's window and terrain change, and comes to the field view after it)
+	field.show_near(mode in ["dest", "field", "target", "equip_pick", "prompt"] and not (fx != null and fx.busy()))
 	match mode:
 		"dest", "field", "equip_pick", "prompt":
 			field.focus(0, _record(0, _cursor_row(), zone_index), frames)
@@ -420,7 +422,8 @@ func refresh() -> void:
 		if shown != 0:
 			_draw_panel(shown)
 		return
-	_draw_band()                # the information band first: the hand and the text draw over it (the duel frame's draw list)
+	if not (fx != null and fx.hides_hand()):
+		_draw_band()            # the information band first: the hand and the text draw over it (the duel frame's draw list); none under a card view
 	var s = engine.state
 	var hand: Array = s.sides[0].hand
 	var foe_turn := mode == "foe"                # the computer's turn: the player's hand leaves the picture (the reference's field view)
@@ -488,6 +491,8 @@ func _cursor_rect() -> Rect2:
 
 
 func _draw_cursor() -> void:
+	if fx != null and fx.busy():
+		return                  # no cursor while a presentation plays (the reference draws none over its effects)
 	if _draw_art_cursor():
 		return
 	var r := _cursor_rect()
@@ -734,6 +739,8 @@ func _hovered_card() -> int:
 
 
 func _draw_info() -> void:
+	if fx != null and fx.hides_hand():
+		return                  # the info line is off while a card-use picture holds the hand's place (the reference's card views have none)
 	var id := _hovered_card()
 	if spectator and mode in ["over", "result"]:
 		# the spectator match's ending: the winner's name, and MATCH OVER once the match is decided for good
@@ -808,7 +815,13 @@ func _draw_bar_card(id: int) -> void:
 			_board_put(Vector2(icon_x, 210), RACE_ICONS + "%02d.png" % race)
 		var star_x := icon_x + 26.0
 		# the field's bar (the monster cursor on the board) shows the race and the attribute only; the reference draws no guardian star there
-		if not face_down_zone and not (mode in ["dest", "field", "target"]):
+		# the attribute symbol sits at x 279, after the race icon (the reference's trace of a face-up Baby Dragon: Wind at 279, 210)
+		var field_bar := mode in ["dest", "field", "target"]
+		if field_bar and not face_down_zone:
+			var attribute := str(strip.get("attribute", "")).to_lower()
+			if attribute != "":
+				_board_put(Vector2(279, 210), BAR_ICONS + "attr_%s.png" % attribute)
+		if not face_down_zone and not field_bar:
 			for key in ["guardian_star_1", "guardian_star_2"]:
 				var star: String = str(strip.get(key, ""))
 				if star != "":
@@ -819,11 +832,17 @@ func _draw_bar_card(id: int) -> void:
 					# (the reference bar's icon for a card with no star)
 					_board_put(Vector2(star_x, 210), RACE_ICONS + "23.png")
 					star_x += 18.0
+	elif mode == "hand":
+		# a spell, trap, ritual or equip in the hand: its kind icon at x 253 (the monsters' race place) and its kind word at x 271, on the
+		# bar's first row, both as the reference draws them (the trace of a hand Equip: icon 23 at 253, 210; the word at 271, 210)
+		if race >= 0:
+			_board_put(Vector2(253.0, 210), RACE_ICONS + "%02d.png" % race)
+		_board_put(Vector2(271.0, 210), DUEL_CARD_LABELS + "label_%s.png" % str(strip.get("type", "")).to_lower())
 	else:
 		_say(str(engine.state.card_type(id)).to_upper(), second)
-		# a spell, trap, ritual or equip: its kind icon alone at the bar's right (x 271 in the hand, 279 on the field)
+		# a spell, trap, ritual or equip on the field: its kind icon alone at the bar's right (x 279)
 		if race >= 0:
-			_board_put(Vector2(271.0 if mode == "hand" else 279.0, 210), RACE_ICONS + "%02d.png" % race)
+			_board_put(Vector2(279.0, 210), RACE_ICONS + "%02d.png" % race)
 
 
 ## The bar's digits: 8 x 8 cells (duel_bar/digit_<d>.png), right aligned: the units digit's cell starts at at.x, the tens 8 to its left,
@@ -907,6 +926,7 @@ func _board_put(at: Vector2, path: String) -> void:
 const STAR_ICONS := "res://assets/screens/star_icons/"   # the guardian star symbols, 16 x 16, baked from the disc (tools/extract.py bake_star_icons)
 const RACE_ICONS := "res://assets/screens/race_icons/"   # the race and kind icons, codes 0 to 23 (tools/extract.py bake_race_icons)
 const BAR_ICONS := "res://assets/screens/duel_bar/"      # the bar's sword, shield and digit cells (tools/extract.py bake_duel_bar_icons)
+const DUEL_CARD_LABELS := "res://assets/screens/duel_card/"   # the kind words of the bar (label_equip, label_magic, label_trap, label_ritual: 32 x 16)
 const CARD_DIGITS := "res://assets/screens/duel_card/"   # the 8 x 8 digit cells of the duel card (tools/extract.py bake_duel_card_face): the readouts' digits
 const HUD_PANEL := "res://assets/screens/duel_hud/"   # the readout panels: life-point panel, flipped for the second player (extracted by tools/extract.py)
 const ICONS := "res://assets/images/"

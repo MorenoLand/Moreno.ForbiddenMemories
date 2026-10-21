@@ -33,6 +33,18 @@ const WINDOW_LIFT := 24
 const WINDOW_HOLD := 32
 const CLOSE_UP_TURN := 16                         # the card view swings in from edge-on over this many frames
 const CLOSE_UP_FADE := 16
+const TERRAIN_VIEW_TURN := 8                      # the terrain window's card view (the reference: edge-on at +20, full at +28, rising out from +58)
+const TERRAIN_VIEW_HOLD := 26
+const TERRAIN_VIEW_FADE := 24
+const FUSION_DWELL := 76                          # the fused cards rest before they close in (the reference's flash at about +105)
+const FUSION_VIEW_TURN := 8                       # the fused card's view (the reference: edge-on at +121, full at +127, out from +159)
+const FUSION_VIEW_HOLD := 32
+const EQUIP_REST := 12                           # the equip card rests on the chosen monster before the monster rises (the reference: its burst about 99 frames from the flight)
+const EQUIP_VIEW_CENTRE := Vector2(90, 113)   # the equip's monster view (the reference's card at zone 0)
+const SET_DROP_LEAD := 12                      # a set card's drop: the frames before it leaves the hand's place (the reference's drop starts about +12)
+const SET_DROP_FLIGHT := 36                     # its flight to the zone (the reference's card is on the back row about +48)
+const EQUIP_FLOAT := 0                           # the monster rises at once into the placement's burst (the reference: the burst about 99 frames from the flight)
+const FUSION_VIEW_CENTRE := Vector2(128, 115)    # the fused card's view centre (the reference: 32 left and 5 up of the window's centre)
 const RITUAL_STAND_FRAMES := 36                 # the monster rises into its zone after the view (the reference's field shows it at about +528)
 const RITUAL_VIEW_HOLD := 24                   # the ritual monster's close-up holds this long (the reference's summon view)
 const WINDOW_SIZE := Vector2(140, 196)            # the card view: the card's box (the Password reveal's card size, the reference close-up)
@@ -603,7 +615,7 @@ func _event(e: Dictionary, events: Array, index: int, ctx: Dictionary) -> void:
 			else:
 				_placed(_rec(side, "monsters", int(e["zone"])))
 		"set_trap", "set_back":
-			_appear(_rec(side, "traps", int(e["zone"])))
+			_set_drop(_rec(side, "traps", int(e["zone"])), int(e["id"]))
 		"reveal", "defense_off":
 			_turn(_rec(side, "monsters", int(e["zone"])))
 		"stat":
@@ -647,6 +659,22 @@ func _appear(record: int) -> void:
 	var start := func() -> void:
 		_add(record)
 	_beat(start, 10)
+
+
+## A card set face down: it flies from the hand's place to its zone (the reference's drop, about 36 frames), then it is on the field.
+func _set_drop(record: int, id: int) -> void:
+	var lead := func() -> void:
+		pass                            # the card is still in the hand's place for a short while (the reference's drop starts about 12 frames in)
+	_beat(lead, SET_DROP_LEAD)
+	var fly := func() -> void:
+		var box := _rect(record)
+		var from := Vector2(CENTRE.x, 180.0)
+		var offset := box.get_center() - from
+		var anim := func(p: float) -> Dictionary:
+			return {"dx": offset.x * p, "dy": offset.y * p, "sx": 1.0 - 0.6 * p, "sy": 1.0 - 0.6 * p}
+		_card(_face(id), Rect2(from - CARD_RECT_SIZE / 2.0, CARD_RECT_SIZE), SET_DROP_FLIGHT, 0, anim, null, 2.0, Callable())
+	_beat(fly, SET_DROP_FLIGHT)
+	_appear(record)
 
 
 func _turn(record: int) -> void:
@@ -1037,8 +1065,8 @@ func _terrain(value: int) -> void:
 	# the terrain change (effect 10 at the card's variant): the FIELD box shows the new terrain once the program's impact has landed
 	# (the game sets the terrain when its package has loaded, the same point the program's own stage signal follows)
 	var lead := func() -> void:
-		pass                            # the program starts after the card view's fade (the reference's burst at about 120 frames from the play)
-	_beat(lead, 32)
+		pass                            # the program starts 12 frames after the window's fade (its first light then shows at the reference's ~+110)
+	_beat(lead, 12)
 	var change := func() -> void:
 		var show_plate := func() -> void:
 			if field != null:
@@ -1075,13 +1103,13 @@ func _fusion(e: Dictionary, ctx: Dictionary) -> void:
 	var dwell := func() -> void:
 		hand_hidden = true
 		for k in sources.size():
-			_card(_face(int(sources[k])), Rect2(_fusion_pos(k, sources.size(), true) - CARD_RECT_SIZE / 2.0, CARD_RECT_SIZE), 48, 0,
+			_card(_face(int(sources[k])), Rect2(_fusion_pos(k, sources.size(), true) - CARD_RECT_SIZE / 2.0, CARD_RECT_SIZE), FUSION_DWELL, 0,
 					Callable(), null, 2.0, Callable())
-	_beat(dwell, 48)            # the two cards rest in the field's row (the reference: about 48 frames) before they close in
+	_beat(dwell, FUSION_DWELL)  # the two cards rest in the field's row before they close in (the reference's flash at about +105)
 	_beat(converge, 36)
 	var view := func() -> void:
-		_close_up(_card_view(result), 0, CLOSE_UP_TURN, 24, CLOSE_UP_FADE)
-	_beat(view, CLOSE_UP_TURN + 24 + CLOSE_UP_FADE)
+		_close_up(_card_view(result), 0, FUSION_VIEW_TURN, FUSION_VIEW_HOLD, FUSION_VIEW_TURN, "turn", FUSION_VIEW_CENTRE)
+	_beat(view, FUSION_VIEW_TURN + FUSION_VIEW_HOLD + FUSION_VIEW_TURN)
 	var show := func() -> void:
 		hand_hidden = false
 	_beat(show, 0)
@@ -1132,10 +1160,11 @@ func _equip(e: Dictionary, events: Array, index: int, ctx: Dictionary) -> void:
 	_beat(fly, 26)
 	var chosen := func() -> void:
 		pass                            # the equip card rests on the chosen monster before the monster lifts out (the reference: 96 frames pick to lift)
-	_beat(chosen, 70)
+	_beat(chosen, EQUIP_REST)
 	var lifted := _entry_in(visible_entries, dest) if dest >= 0 else {}
 	var before_tex: Texture2D = _texture_of(lifted) if not lifted.is_empty() else _face(monster_id)
 	var leave := func() -> void:
+		hand_hidden = true              # the hand and its band leave the picture from the monster's rise (the reference's equip views)
 		if dest >= 0:
 			_hide(dest)
 		var anim := func(p: float) -> Dictionary:
@@ -1145,7 +1174,7 @@ func _equip(e: Dictionary, events: Array, index: int, ctx: Dictionary) -> void:
 	_beat(leave, 24)
 	var float_hold := func() -> void:
 		pass                            # the monster floats at the centre a while before the placement's burst (the reference)
-	_beat(float_hold, 40)
+	_beat(float_hold, EQUIP_FLOAT)
 	var place := func() -> void:
 		if dest >= 0:
 			_equip_placement(id, box)
@@ -1155,7 +1184,12 @@ func _equip(e: Dictionary, events: Array, index: int, ctx: Dictionary) -> void:
 	if mon != null:
 		after_tex = host._field_face(int(mon["id"]), mon, "monsters")
 	var view := func() -> void:
-		_close_up(_card_view(int(mon["id"]) if mon != null else monster_id), 0, CLOSE_UP_TURN, 24, CLOSE_UP_FADE)
+		# the monster's view with its stats after the equip (the state holds them); its centre is the reference's (measured for the
+		# first zone's monster, the Baby Dragon with the equip 315)
+		var shown_id := int(mon["id"]) if mon != null else monster_id
+		var stat_atk: int = host.engine.state.atk(mon) if mon != null else -1
+		var stat_def: int = host.engine.state.def(mon) if mon != null else -1
+		_close_up(_card_view(shown_id, stat_atk, stat_def), 0, CLOSE_UP_TURN, 24, CLOSE_UP_FADE, "fade", EQUIP_VIEW_CENTRE)
 	_beat(view, CLOSE_UP_TURN + 24 + CLOSE_UP_FADE)
 	var back := func() -> void:
 		var settle := func(p: float) -> Dictionary:
@@ -1171,6 +1205,9 @@ func _equip(e: Dictionary, events: Array, index: int, ctx: Dictionary) -> void:
 		_flash(box, GOLD, 12, 0)
 		_figure(box, absi(bonus), GREEN if bonus > 0 else RED, 0)
 	_beat(bump, 34)
+	var show := func() -> void:
+		hand_hidden = false
+	_beat(show, 0)
 
 
 func _discard(id: int) -> void:
@@ -1216,7 +1253,10 @@ func _window(card: int, side: int, also: Callable = Callable()) -> void:
 			var t := clampf((f - 8.0) / 16.0, 0.0, 1.0)
 			return {"dy": 26.0 * t, "sx": 1.0 - 0.4 * t, "sy": 1.0 - 0.4 * t, "alpha": 1.0 - clampf((f - 16.0) / 8.0, 0.0, 1.0)}
 		_card(face, Rect2(CENTRE_AT, HAND_SIZE), WINDOW_LIFT, 0, lift, null, 2.0, Callable())
-		_close_up(_card_view(card), WINDOW_LIFT, CLOSE_UP_TURN, WINDOW_HOLD, CLOSE_UP_FADE)
+		if group == "terrain":
+			_close_up(_card_view(card), WINDOW_LIFT, TERRAIN_VIEW_TURN, TERRAIN_VIEW_HOLD, TERRAIN_VIEW_FADE, "rise")
+		else:
+			_close_up(_card_view(card), WINDOW_LIFT, CLOSE_UP_TURN, WINDOW_HOLD, CLOSE_UP_FADE)
 		# a ritual's start (effect 18, the flash) is with its window: the reference's start request is raised as the card is shown
 		if group == "ritual":
 			_group_effect(group, Rect2(CENTRE - WINDOW_SIZE / 2.0, WINDOW_SIZE), card, side)
@@ -1238,26 +1278,36 @@ func _window(card: int, side: int, also: Callable = Callable()) -> void:
 ## starts `delay` frames after the call. The view is the card's face at the window's size (the duel's own card picture).
 ## The card's close-up texture: the whole card at 1x (140 x 196), composed by CardView.card_picture as the card-detail routine composes
 ## it (the Password reveal's card). Cached per card; the field face is the fallback.
-func _card_view(id: int) -> Texture2D:
-	if card_views.has(id):
-		return card_views[id]
+func _card_view(id: int, atk := -1, dfn := -1) -> Texture2D:
+	var key := "%d:%d:%d" % [id, atk, dfn]
+	if card_views.has(key):
+		return card_views[key]
 	var data: Dictionary = host.engine.state.data.card(id)
-	var base := CardView.card_picture(id, data, int(data.get("attack", 0)), int(data.get("defense", 0)), card_ui_layout)
+	var shown_atk := atk if atk >= 0 else int(data.get("attack", 0))
+	var shown_def := dfn if dfn >= 0 else int(data.get("defense", 0))
+	var base := CardView.card_picture(id, data, shown_atk, shown_def, card_ui_layout)
 	if base == null:
 		return _face(id)
 	var tex := ImageTexture.create_from_image(base)
-	card_views[id] = tex
+	card_views[key] = tex
 	return tex
 
 
-func _close_up(tex: Texture2D, delay: int, turn: int, hold: int, fade: int) -> void:
+func _close_up(tex: Texture2D, delay: int, turn: int, hold: int, fade: int, exit := "fade", centre := WINDOW_CENTRE) -> void:
 	var total := turn + hold + fade
-	var rect := Rect2(WINDOW_CENTRE - WINDOW_SIZE / 2.0, WINDOW_SIZE)
+	var rect := Rect2(centre - WINDOW_SIZE / 2.0, WINDOW_SIZE)
 	var anim := func(p: float) -> Dictionary:
 		var f := p * float(total)
 		var s := sin(clampf(f / float(turn), 0.0, 1.0) * PI * 0.5)
-		var a := 1.0 - clampf((f - float(turn + hold)) / float(fade), 0.0, 1.0)
-		return {"sx": maxf(s, 0.02), "alpha": a}
+		var out := clampf((f - float(turn + hold)) / float(fade), 0.0, 1.0)
+		match exit:
+			"rise":
+				# the card grows and rises toward the viewer as it fades (the reference's terrain window)
+				return {"sx": maxf(s, 0.02) * (1.0 + 0.9 * out), "sy": 1.0 + 0.9 * out, "dy": 41.0 * out, "alpha": 1.0 - out}
+			"turn":
+				# the card turns edge-on as it leaves (the reference's fusion view)
+				return {"sx": maxf(s * cos(out * PI * 0.5), 0.02), "alpha": 1.0}
+		return {"sx": maxf(s, 0.02), "alpha": 1.0 - out}
 	_card(tex, rect, total, delay, anim, null, 2.0, Callable())
 
 
