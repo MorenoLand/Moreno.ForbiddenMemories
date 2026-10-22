@@ -89,7 +89,6 @@ const SORT_MODES := [[1, 2, 3, 4, 5, 6, 8], [1, 2, 3, 4, 5, 6, 9]]
 const SORT_ICONS := ["sort_card_number", "sort_owned_first", "sort_best_stat", "sort_attack", "sort_defense", "sort_card_type"]
 const TYPE_NAMES := ["Dragon", "Spellcaster", "Zombie", "Warrior", "Beast-Warrior", "Beast", "Winged Beast", "Fiend", "Fairy", "Insect",
 	"Dinosaur", "Reptile", "Fish", "Sea Serpent", "Machine", "Thunder", "Aqua", "Pyro", "Rock", "Plant", "Magic", "Trap", "Ritual", "Equip"]
-const VIEW_DIR := "res://assets/screens/library/"     # the card view's frame picture (the same card frame as the duel's viewer)
 const VIEW_TICKS := 19                               # the viewer's slide: 0x400 of speed at 0x55 a tick
 const VIEW_Y := 20                                   # the viewer sits 20 pixels down (the original's viewer offset)
 const VIEW_BOX_REST := 148.0                         # the text box's x at rest (it slides in from 328)
@@ -209,12 +208,6 @@ func _ready() -> void:
 	viewer_node.add_child(viewer_text)
 	viewer_node.add_child(viewer_icons)
 	clip.add_child(viewer_node)
-	var frame_texture := ModArt.texture(VIEW_DIR + "card_frame.png")
-	if frame_texture != null:
-		viewer_frame.texture = frame_texture
-	var view_layout = _read_viewer_json(VIEW_DIR + "layout.json")
-	if view_layout is Dictionary and view_layout.has("card_frame"):
-		viewer_frame_offset = Vector2(float(view_layout["card_frame"]["x"]), float(view_layout["card_frame"]["y"]))
 	viewer_view = CardView.new(text, sharp)
 	clip.add_child(dialog)                        # the confirmation is drawn on the window, not on the sliding board
 	dialog.z_index = 10
@@ -555,8 +548,14 @@ func _physics_process(_delta: float) -> void:
 		closed.emit()
 		return
 	board.position = Vector2(-viewport_x, 0)
-	# the board's dim: the viewer's level under the viewer, the confirmation's level with it up, else full
-	var level := viewer_fade if viewer_open or not dialog_open else DIALOG_FADE
+	# the board's dim: it steps two levels a tick toward the viewer's level (0x40 with the viewer up and not closing, else 0xFF), so it
+	# comes back up after the viewer has closed; the confirmation's level replaces it while the confirmation is up
+	var target := VIEW_FADE_REST if viewer_open and not viewer_closing else 0xFF
+	if viewer_fade < target:
+		viewer_fade = mini(viewer_fade + 2, target)
+	elif viewer_fade > target:
+		viewer_fade = maxi(viewer_fade - 2, target)
+	var level := DIALOG_FADE if dialog_open and not viewer_open else viewer_fade
 	viewer_shade.color = Color(0, 0, 0, 1.0 - level / 255.0)
 	_refresh_rows()
 	board.queue_redraw()
@@ -842,7 +841,7 @@ var viewer_frame := Sprite2D.new()
 var viewer_art := Sprite2D.new()
 var viewer_text := Node2D.new()            # the text box's content, in the box's own coordinates (origin: the box's top-left)
 var viewer_icons := Node2D.new()
-var viewer_frame_offset := Vector2(-8, -8)  # the frame picture's offset from its box (the library's card_frame layout)
+var viewer_card_ui: Dictionary = CardView.load_ui()   # the card_ui pieces' layout (the composed card's stats and labels)
 var viewer_view: CardView                  # the card view's text box, stats and icons (shared with the Library)
 
 
@@ -1154,12 +1153,6 @@ func _pulse() -> float:
 ## The card viewer: the card's picture slides in from the left and the text box from the right over
 ## VIEW_TICKS ticks while the board dims; Circle slides both back and closes. Up and Down show the next card that has a row in the
 ## list (the PC port's card browse, Build Deck): the cursor moves along with it and the card is replaced without a slide.
-func _read_viewer_json(path: String):
-	if not FileAccess.file_exists(path):
-		return null
-	return JSON.parse_string(FileAccess.get_file_as_string(path))
-
-
 func _open_viewer(id: int) -> void:
 	viewer_id = id
 	viewer_open = true
@@ -1173,12 +1166,6 @@ func _open_viewer(id: int) -> void:
 
 func _viewer_update(pad: Dictionary) -> void:
 	# the board's dim: the fade steps two levels a tick toward its target (0x40 up, 0xFF back down)
-	var target := 0xFF if viewer_closing else VIEW_FADE_REST
-	if viewer_fade < target:
-		viewer_fade = mini(viewer_fade + 2, target)
-	elif viewer_fade > target:
-		viewer_fade = maxi(viewer_fade - 2, target)
-	viewer_shade.color = Color(0, 0, 0, 1.0 - viewer_fade / 255.0)
 	if viewer_closing or viewer_slide < VIEW_TICKS:
 		viewer_slide += 1
 		var progress := clampf(float(viewer_slide) / VIEW_TICKS, 0.0, 1.0)
@@ -1201,7 +1188,7 @@ func _place_viewer(p: float) -> void:
 	var e := sin(p * PI / 2.0)
 	var box_x := lerpf(VIEW_BOX_OFF, VIEW_BOX_REST, e)
 	var art_x := lerpf(VIEW_ART_OFF, VIEW_ART_REST, e)
-	viewer_frame.position = Vector2(box_x, VIEW_Y + 14) + viewer_frame_offset
+	viewer_frame.position = Vector2(art_x, VIEW_Y)     # the whole card (140 x 196) slides in with the picture
 	viewer_text.position = Vector2(box_x, VIEW_Y + 14)
 	viewer_icons.position = Vector2(box_x, VIEW_Y + 14)
 	viewer_art.position = Vector2(art_x, VIEW_Y)
@@ -1234,10 +1221,11 @@ func _show_viewer_card(id: int) -> void:
 		for child in node.get_children():
 			node.remove_child(child)
 			child.queue_free()
-	var art_record: Dictionary = cards.art(id)
-	if not art_record.is_empty():
-		ModArt.apply(viewer_art, art_record)
 	var data: Dictionary = cards.card(id)
 	if data.is_empty():
 		return
-	viewer_view.build(viewer_text, viewer_icons, id, data)
+	# the whole card (frame, name plate, picture, stats, attribute) is composed as the duel's viewer does; the text box carries the text
+	var picture := CardView.card_picture(id, data, int(data.get("attack", 0)), int(data.get("defense", 0)), viewer_card_ui)
+	viewer_frame.texture = ImageTexture.create_from_image(picture) if picture != null else null
+	viewer_art.texture = null
+	viewer_view.build(viewer_text, viewer_icons, id, data, false)
