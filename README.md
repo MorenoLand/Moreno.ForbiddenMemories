@@ -1,4 +1,6 @@
-# Forbidden Memories
+# Forbidden Memories (work in progress)
+
+> **Work in progress.** Most screens, the rules engine, the AI, the story and the music are in and checked against the original, but the port is unfinished and still being compared screen by screen. Expect rough edges.
 
 A native Redot / Godot port of Yu-Gi-Oh! Forbidden Memories (PS1, USA), rebuilt screen by screen from the game's own art, text, sound
 and logic. It needs your own disc image; no game data is in this repository.
