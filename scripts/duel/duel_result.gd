@@ -416,7 +416,9 @@ func _show_page(p: int) -> void:
 	var on_spoils := p == 0
 	for side in arrows.size():
 		arrows[side].position = ARROW_AT[p][side]
-	badge_sprite.visible = on_spoils and int(result["winner"]) == 0
+	# the POW badge and the rank letter go to the winner when it is a human side: side 0 always, side 1 in a two-player duel
+	var human_winner := int(result["winner"]) == 0 or int(stats.get("opponent_id", -1)) < 0
+	badge_sprite.visible = on_spoils and human_winner
 	letter_sprite.visible = badge_sprite.visible
 	for star in starchip_sprites:
 		star.visible = on_spoils
