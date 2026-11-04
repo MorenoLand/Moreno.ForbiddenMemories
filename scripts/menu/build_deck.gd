@@ -96,6 +96,7 @@ const VIEW_BOX_OFF := 328.0
 const VIEW_ART_OFF := -140.0                         # the card picture slides in from -140 to 2
 const VIEW_ART_REST := 2.0
 const VIEW_FADE_REST := 0x40                         # the board dims to 0x40 with the viewer up, back to 0xFF after
+const DIM_STEP := 8                                  # the board's dim steps 8 levels a tick (the fade's step at the leave and the viewer)
 const FLAG_ON := 1
 const FLAG_HELD := 0x80                       # in the deck, none in the chest: drawn dim
 
@@ -146,6 +147,7 @@ var drag_pane := -1                          # the scroll thumb being dragged (t
 var drag_grab := 0.0                         # the pointer's offset inside the thumb when the drag began
 var row_view: CardView                       # draws the rows' name lines (race icon, guardian stars, name)
 var row_layers: Array = []                   # per list: the Node2D that holds its visible rows' name lines
+var thumb_shown := [0, 0]                    # per list: the thumb's row as drawn (set from the list before each tick's input, as the reference does)
 var row_signature: Array = [[], []]          # per list: the ids and flags of the rows the name lines were built from
 
 
@@ -543,27 +545,25 @@ func _physics_process(_delta: float) -> void:
 		return
 	frame += 1
 	var pad := _pad()
+	# the scroll thumbs take the list's position before the tick's input moves it (the card list input update sets the scroll box first),
+	# so a thumb trails its cursor by one tick
+	for k in 2:
+		thumb_shown[k] = _thumb_row(lists[k])
 	_dispatch(pad)
 	if state == STATE_DONE and not finished:
 		finished = true
 		closed.emit()
 		return
 	board.position = Vector2(-viewport_x, 0)
-	# the board's dim: it steps two levels a tick toward the viewer's level (0x40 with the viewer up and not closing, else 0xFF), so it
-	# comes back up after the viewer has closed; the confirmation's level replaces it while the confirmation is up
-	var target := VIEW_FADE_REST if viewer_open and not viewer_closing else 0xFF
-	if viewer_fade < target:
-		viewer_fade = mini(viewer_fade + 2, target)
-	elif viewer_fade > target:
-		viewer_fade = maxi(viewer_fade - 2, target)
-	if dialog_open and not viewer_open:
-		# the confirmation's dim is a subtractive box of grey 0xFF - level, its colour kept to 5 bits (v << 3): the board loses 88 at 0xA0
-		var grey := ((0xFF - DIALOG_FADE) >> 3) << 3
-		viewer_shade.material = dim_subtract
-		viewer_shade.color = Color(grey / 255.0, grey / 255.0, grey / 255.0, 1.0)
-	else:
-		viewer_shade.material = null
-		viewer_shade.color = Color(0, 0, 0, 1.0 - viewer_fade / 255.0)
+	# the board's dim: the fade steps DIM_STEP levels a tick toward dim_target (set when the viewer or the confirmation opens or closes)
+	if dim_level < dim_target:
+		dim_level = mini(dim_level + DIM_STEP, dim_target)
+	elif dim_level > dim_target:
+		dim_level = maxi(dim_level - DIM_STEP, dim_target)
+	# the dim is a subtractive box of grey 0xFF - level, its colour kept to 5 bits (v << 3): the board loses 88 at 0xA0 and 0xB8 at 0x40
+	var grey := ((0xFF - dim_level) >> 3) << 3
+	viewer_shade.material = dim_subtract
+	viewer_shade.color = Color(grey / 255.0, grey / 255.0, grey / 255.0, 1.0)
 	_refresh_rows()
 	board.queue_redraw()
 
@@ -774,6 +774,7 @@ func _leave(pad: Dictionary) -> void:
 		if _has_open_slot():
 			dialog_open = true
 			dialog_choice = 0
+			dim_target = DIALOG_FADE
 			_rebuild_dialog()
 			return
 	if dialog_open:
@@ -806,6 +807,7 @@ func _answer_dialog(choice: int) -> void:
 	dialog_open = false
 	_rebuild_dialog()
 	if choice == 0:
+		dim_target = 0xFF
 		_set_state(next_state)
 
 
@@ -841,8 +843,9 @@ var viewer_open := false                   # the viewer is up (sliding in, shown
 var viewer_closing := false
 var viewer_slide := 0                      # ticks of the slide so far
 var viewer_id := 0                         # the card shown
-var viewer_fade := 255                     # the board's brightness level (0xFF, 0x40 with the viewer up)
-var viewer_shade := ColorRect.new()        # the board's dim: black at 1 - level / 255 (the confirmation's is subtractive, see dim_subtract)
+var dim_level := 0xFF                      # the board's brightness level (0xFF, 0xA0 with the confirmation up, 0x40 with the viewer up)
+var dim_target := 0xFF                     # the level the dim steps toward (set when the viewer or the confirmation opens or closes)
+var viewer_shade := ColorRect.new()        # the board's dim: a subtractive grey box of 0xFF - dim_level (see dim_subtract)
 var dim_subtract := CanvasItemMaterial.new()
 var viewer_node := Node2D.new()            # the window's own layer above the board
 var viewer_frame := Sprite2D.new()
@@ -1070,10 +1073,7 @@ func _draw_board() -> void:
 		var cursor_tint := Color(pulse, pulse, pulse)
 		var cursor := "cursor_bar" if k == 0 else "cursor_bar_blue"
 		board.draw_texture(tex[cursor], _art(cursor, Vector2(CURSOR_X[k], CURSOR_Y + ROW_STEP * list.cursor)), cursor_tint)
-		var thumb_row := 0
-		if (list.first | list.cursor) != 0:
-			thumb_row = (list.first + list.cursor + 1) * 152 / list.sort_row_count
-		board.draw_texture(tex["thumb"], _art("thumb", Vector2(SCROLL_X[k], SCROLL_Y + thumb_row)))
+		board.draw_texture(tex["thumb"], _art("thumb", Vector2(SCROLL_X[k], SCROLL_Y + thumb_shown[k])))
 	_draw_arrow("arrow_right", Vector2(BOX_X[0], 0))
 	_draw_arrow("arrow_left", Vector2(BOX_X[1], 0))
 
@@ -1165,6 +1165,7 @@ func _open_viewer(id: int) -> void:
 	viewer_id = id
 	viewer_open = true
 	viewer_closing = false
+	dim_target = VIEW_FADE_REST
 	viewer_slide = 0
 	_show_viewer_card(id)
 	viewer_node.visible = true
@@ -1184,6 +1185,7 @@ func _viewer_update(pad: Dictionary) -> void:
 		return
 	if pad.pressed.has("cancel"):
 		viewer_closing = true
+		dim_target = 0xFF
 		viewer_slide = 0
 		sound.emit(0x34)
 		return
