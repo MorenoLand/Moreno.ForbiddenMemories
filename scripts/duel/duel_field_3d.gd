@@ -21,6 +21,13 @@ extends RefCounted
 ## target. The layout (assets/screens/duel_field/layout.json) and the terrain models come from tools/extract.py --screens.
 
 const ScreenFit := preload("res://scripts/system/screen_fit.gd")
+const Gte := preload("res://scripts/duel/effects/gte.gd")
+## The hand view's geometry matrix and translation, as the console's geometry engine holds them for the duel's resting view (measured
+## from the console's geometry trace of the hand view). Their picture points are exact integers (see _hand_point).
+const HAND_RT := [4125, 0, 0, 0, 3779, -1585, 0, 1573, 3805]
+const HAND_TR := [0, -4, 602]
+## The hand view's board vertices are placed by the geometry engine's integer projection (the render target's rows are flipped in _board_shader).
+const EXACT_HAND_BOARD := true
 const DIR := "res://assets/screens/duel_field/"
 const VIEW_HEIGHT := 264
 const SHIFT := 24.0                  # the picture's first line within the view (the field viewport's line 24 is the picture's line 0)
@@ -72,6 +79,10 @@ var intro_fade := -1                # frames left in the opening fade from black
 var target_z := 0.0                 # the reference point's z target (the cursor's row)
 var focused := -1                   # the row (0 to 3 of the grid) the reference point is moving to or on
 var shader_board: Shader
+var _gte := Gte.new()
+var _unr := PackedInt32Array()      # the geometry engine's reciprocal table (built in _init)
+var board_surfaces: Array = []      # the board's surfaces: game-unit points, shading, texture coordinates and material
+var board_instance: MeshInstance3D = null
 var board_tint := Vector3i(128, 128, 128)   # the board tint the effect programs set (Dark Hole dims it; 128 is neutral)
 var board_materials: Array = []
 var shader_card: Shader
@@ -137,6 +148,12 @@ func setup(host: Node, world: Node2D, sharp: ShaderMaterial, duel_terrain: int) 
 		return false
 	view_side = 0
 	target_z = 0.0
+	_gte.set_geom_offset(160, 108)
+	_gte.set_screen_distance(int(layout["projection"]))
+	var hand := Gte.Mat.new()
+	hand.m = PackedInt32Array(HAND_RT)
+	hand.t = PackedInt32Array(HAND_TR)
+	_gte.set_rt(hand)
 	cam = [FAR_DISTANCE, FAR_ELEVATION, _heading(0), 0.0]
 	last_target = cam.duplicate()
 	near = false
@@ -164,6 +181,8 @@ func set_board_terrain(duel_terrain: int) -> void:
 	for child in board.get_children():
 		child.queue_free()
 	board_materials.clear()
+	board_surfaces.clear()
+	board_instance = null
 	_build_board(DIR + "terrain_%d/" % terrain)
 
 
@@ -242,15 +261,19 @@ func _shader() -> String:
 func _board_shader() -> String:
 	var code := "shader_type spatial;\nrender_mode unshaded, cull_disabled;\nuniform sampler2D albedo_texture : filter_nearest;\n"
 	code += "uniform vec4 board_tint : source_color = vec4(1.0);\nuniform float dither_px = 1.0;\n"
-	code += "uniform vec2 view_size = vec2(320.0, 264.0);\nuniform float snap = 1.0;\nuniform vec2 screen_shift = vec2(0.0);\n"
+	code += "uniform vec2 view_size = vec2(320.0, 264.0);\nuniform float snap = 1.0;\nuniform vec2 screen_shift = vec2(0.0);\nuniform float use_custom = 0.0;\n"
 	code += "varying vec2 tex_w;\nvarying vec3 col_w;\nvarying float depth_w;\n"
 	code += "const float DITHER[16] = float[16](-4.0, 0.0, -3.0, 1.0, 2.0, -2.0, 3.0, -1.0, -3.0, 1.0, -4.0, 0.0, 3.0, -1.0, 2.0, -2.0);\n"
 	code += "void vertex() {\n\tvec4 clip = PROJECTION_MATRIX * (MODELVIEW_MATRIX * vec4(VERTEX, 1.0));\n"
 	code += "\tvec2 ndc = clip.xy / clip.w;\n"
-	code += "\tvec2 pp = vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * view_size;\n\tpp += screen_shift;\n"
+	code += "\tvec2 pp = use_custom > 0.5 ? CUSTOM0.xy * (view_size.x / 320.0) : vec2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * view_size;\n"
+	code += "\tpp += use_custom > 0.5 ? vec2(0.0) : screen_shift;\n"
+	code += "\tif (use_custom > 0.5) { pp.y = view_size.y - 1.0 - pp.y; }\n"
 	code += "\tpp = mix(pp, floor(pp + 0.5) + 0.5, snap);\n"
-	code += "\tPOSITION = vec4((vec2(pp.x / view_size.x, 1.0 - pp.y / view_size.y) * 2.0 - 1.0) * clip.w, clip.z, clip.w);\n"
-	code += "\ttex_w = (UV * 256.0 - 0.5) * clip.w;\n\tcol_w = COLOR.rgb * clip.w;\n\tdepth_w = clip.w;\n}\n"
+	code += "\tfloat dz = use_custom > 0.5 ? CUSTOM0.z : clip.w;\n"
+	code += "\tfloat zc = use_custom > 0.5 ? (6001.0 / 5999.0) * dz - 12002.0 / 5999.0 : clip.z;\n"
+	code += "\tPOSITION = vec4((vec2(pp.x / view_size.x, 1.0 - pp.y / view_size.y) * 2.0 - 1.0) * dz, zc, dz);\n"
+	code += "\ttex_w = (UV * 256.0 - 0.5) * dz;\n\tcol_w = COLOR.rgb * dz;\n\tdepth_w = dz;\n}\n"
 	code += "void fragment() {\n\tvec2 tc = tex_w / depth_w;\n"
 	code += "\tivec2 size = textureSize(albedo_texture, 0);\n"
 	code += "\tivec2 ti = clamp(ivec2(floor(tc + 0.5)), ivec2(0), size - ivec2(1));\n"
@@ -289,6 +312,7 @@ func _aim() -> void:
 	if ahead.length() < 0.0001:
 		ahead = Vector3.FORWARD
 	camera.look_at_from_position(g_eye, g_target, ahead.normalized())
+	_update_board()
 
 
 static func _godot(p: Vector3) -> Vector3:
@@ -841,27 +865,22 @@ func _build_board(folder: String) -> bool:
 	var count := int(model["textures"])
 	var surfaces: Array = []
 	for i in count:
-		surfaces.append({"v": PackedVector3Array(), "uv": PackedVector2Array(), "c": PackedColorArray()})
+		surfaces.append({"p": PackedVector3Array(), "v": PackedVector3Array(), "uv": PackedVector2Array(), "c": PackedColorArray()})
 	for face in model["faces"]:
 		var s: Dictionary = surfaces[int(face["t"])]
 		for k in 3:
 			var p: Array = verts[int(face["v"][k])]
+			s["p"].append(Vector3(p[0], p[1], p[2]))
 			s["v"].append(_godot(Vector3(p[0], p[1], p[2])))
 			var uv: Array = face["uv"][k]
 			s["uv"].append(Vector2((float(uv[0]) + 0.5) / 256.0, (float(uv[1]) + 0.5) / 256.0))
 			var shade := clampf(float(face["s"][k]) * 0.5, 0.0, 1.0)     # the lit factor (up to 1.5 on the board) is stored halved: a vertex colour is at most 1
 			s["c"].append(Color(shade, shade, shade))
-	var mesh := ArrayMesh.new()
+	board_surfaces.clear()
 	for i in count:
 		var s: Dictionary = surfaces[i]
 		if s["v"].is_empty():
 			continue
-		var arrays := []
-		arrays.resize(Mesh.ARRAY_MAX)
-		arrays[Mesh.ARRAY_VERTEX] = s["v"]
-		arrays[Mesh.ARRAY_TEX_UV] = s["uv"]
-		arrays[Mesh.ARRAY_COLOR] = s["c"]
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		var material := ShaderMaterial.new()
 		material.shader = shader_board
 		material.set_shader_parameter("board_tint", Color(board_tint.x / 128.0, board_tint.y / 128.0, board_tint.z / 128.0))
@@ -873,8 +892,81 @@ func _build_board(folder: String) -> bool:
 		var image := Image.load_from_file(folder + "texture_%d.png" % i)
 		if image != null:
 			material.set_shader_parameter("albedo_texture", ImageTexture.create_from_image(image))
-		mesh.surface_set_material(mesh.get_surface_count() - 1, material)
-	var instance := MeshInstance3D.new()
-	instance.mesh = mesh
-	board.add_child(instance)
+		s["material"] = material
+		board_surfaces.append(s)
+	board_instance = MeshInstance3D.new()
+	board.add_child(board_instance)
+	_update_board()
 	return true
+
+
+## The board's mesh with each vertex's picture position for the current view. The position is what the console's geometry engine
+## gives for the vertex (the integer RotTransPers of _hand_point) in the hand view, and the camera's float projection in the other views.
+## The shader places each vertex at that position (CUSTOM0, in picture pixels, lines 24 to 263 of the field).
+func _update_board() -> void:
+	if board_instance == null or board_surfaces.is_empty():
+		return
+	var mesh := ArrayMesh.new()
+	var exact := _hand_exact()
+	for s in board_surfaces:
+		var pixels := PackedFloat32Array()
+		for p in s["p"]:
+			var at := _hand_point(p) if exact else Vector3.ZERO
+			pixels.append_array([at.x, at.y, at.z, 0.0])
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = s["v"]
+		arrays[Mesh.ARRAY_TEX_UV] = s["uv"]
+		arrays[Mesh.ARRAY_COLOR] = s["c"]
+		arrays[Mesh.ARRAY_CUSTOM0] = pixels
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {}, Mesh.ARRAY_CUSTOM_RGBA_FLOAT << Mesh.ARRAY_FORMAT_CUSTOM0_SHIFT)
+		mesh.surface_set_material(mesh.get_surface_count() - 1, s["material"])
+	for material in board_materials:
+		(material as ShaderMaterial).set_shader_parameter("use_custom", 1.0 if exact else 0.0)
+	board_instance.mesh = mesh
+
+
+## True while the view is the hand view of the turn side (the view the console's matrices are measured in).
+func _hand_exact() -> bool:
+	return EXACT_HAND_BOARD and not near and view_side == 0 and cam_left == 0 and not intro_running and cam == [FAR_DISTANCE, FAR_ELEVATION, _heading(0), 0.0]
+
+
+## The hand view's point of a board vertex (game units) through the console's geometry engine: the view matrix HAND_RT and HAND_TR, the
+## screen distance 300 and the centre (160, 108). The picture point is the integer result; the viewport's line is 24 below it.
+func _hand_point(p: Vector3) -> Vector3:
+	var m := _gte.rot_trans(Vector3i(roundi(p.x), roundi(p.y), roundi(p.z)))
+	var ir_x := clampi(m.x, -32768, 32767)
+	var ir_y := clampi(m.y, -32768, 32767)
+	var sz := clampi(m.z, 0, 0xFFFF)
+	var q := _divide(int(layout["projection"]), sz)
+	var sx := clampi((160 * 65536 + ir_x * q) >> 16, -1024, 1023)
+	var sy := clampi((108 * 65536 + ir_y * q) >> 16, -1024, 1023)
+	return Vector3(sx, sy + SHIFT, sz)
+
+
+## The geometry engine's reciprocal divide (H / SZ as a 17-bit quotient, Newton-Raphson on a 257-entry table of the console's).
+func _divide(h: int, sz: int) -> int:
+	if sz == 0 or h >= sz * 2:
+		return 0x1FFFF
+	var zeros := 0
+	for bit in range(15, -1, -1):
+		if sz & (1 << bit):
+			break
+		zeros += 1
+	var n := h << zeros
+	var d := sz << zeros
+	var u := _unr[(d - 0x7FC0) >> 7] + 0x101
+	d = (0x2000080 - d * u) >> 8
+	d = (0x0000080 + d * u) >> 8
+	return mini(0x1FFFF, (n * d + 0x8000) >> 16)
+
+
+func _init() -> void:
+	_build_unr()
+
+
+func _build_unr() -> void:
+	_unr.resize(257)
+	for i in 257:
+		_unr[i] = maxi(0, (0x40000 / (i + 0x100) + 1) / 2 - 0x101)
+
