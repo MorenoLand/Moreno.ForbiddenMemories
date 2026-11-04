@@ -67,6 +67,11 @@ var portraits: Dictionary = {}
 var pictures: Dictionary = {}
 var busts: BustEffect = BustEffect.new()   # the speaker busts (both slots' records and their layers)
 var fade := 255            # the picture's brightness (the shade is the opposite)
+var overlay_sprite := Sprite2D.new()   # the picture's first overlay (a child of picture, so it moves with it)
+var glow_sprite := Sprite2D.new()      # the glow (semi-transparent, drawn over the overlay)
+var scene_layout: Dictionary = {}     # tools/extract.py's scenes/layout.json: per picture, its layers and whether the glow pulses
+var pulse_on := false                 # the picture's glow is driven by the sine pulse (its glow object holds the record value 1)
+var pulse_angle := 0                  # the pulse's phase, in 4096ths of a turn, advanced by 32 each step from 0 when the picture is shown
 var ready_ok := false
 
 
@@ -93,6 +98,14 @@ func _ready() -> void:
 	picture.centered = false
 	picture.material = sharp
 	world.add_child(picture)
+	for layer in [overlay_sprite, glow_sprite]:
+		layer.centered = false
+		picture.add_child(layer)
+	overlay_sprite.material = sharp
+	glow_sprite.material = ScreenFit.make_material(true)   # the glow is ABR 1 (B + F): added to what is behind it
+	var layout_json = JSON.parse_string(FileAccess.get_file_as_string(DIR + "scenes/layout.json"))
+	if typeof(layout_json) == TYPE_DICTIONARY:
+		scene_layout = layout_json
 	busts.attach(world)
 	world.move_child(busts.root, picture.get_index() + 1)   # over the picture, under the dialog frame
 	frame.centered = false
@@ -459,6 +472,66 @@ func _set_picture(id: int, viewport: Vector2) -> void:
 			_note("picture:missing:%03x" % id)
 	picture.texture = pictures[id]
 	picture.position = -viewport
+	var info: Dictionary = scene_layout.get("%03x" % id, {})
+	var layers: Array = info.get("layers", [])
+	overlay_sprite.texture = _layer_texture(id, "overlay") if "overlay" in layers else null
+	glow_sprite.texture = _layer_texture(id, "glow") if "glow" in layers else null
+	pulse_on = bool(info.get("pulse", false))
+	pulse_angle = 0
+	_set_tints(SHADE_NEUTRAL, SHADE_NEUTRAL, SHADE_NEUTRAL)
+
+
+## One layer of a picture ("overlay" or "glow"), cached with the pictures.
+func _layer_texture(id: int, role: String) -> Texture2D:
+	var key := "%03X_%s" % [id, role]
+	if not pictures.has(key):
+		pictures[key] = _texture(DIR + "scenes/%03X_%s.png" % [id, role])
+	return pictures[key]
+
+
+## The glow pulse (the scene-script callback 1, run once per step while the picture is up). Its sine phase starts at 0 when the
+## picture is shown and goes up 32 a step, 4096 to a turn. From the sine it takes an intensity of -24..24 (a zero is 1 and a 24 is 23).
+## The base picture and the first overlay get (intensity + 24) / 2 - 128 and the glow gets intensity - 104, each stored as a colour byte
+## (0x80 is 1.0): the colour multiplies the texels as the PS1 does, 128 for 1.0. The integer divisions truncate toward zero, as C's do.
+func _pulse_step() -> void:
+	if not pulse_on or picture.texture == null:
+		return
+	pulse_angle = (pulse_angle + 32) & 0xFFF
+	var intensity := _rsin(pulse_angle) * 24 / SINE_ONE
+	if intensity == 0:
+		intensity = 1
+	if intensity == 24:
+		intensity = 23
+	var picture_byte := ((intensity + 24) / 2 - 128) & 0xFF
+	var glow_byte := (intensity - 104) & 0xFF
+	_set_tints(picture_byte, picture_byte, glow_byte)
+
+
+## Sets the colour of the base picture and its layers: the byte of 128 is 1.0 (the PS1 modulates texel * colour / 128).
+func _set_tints(picture_byte: int, overlay_byte: int, glow_byte: int) -> void:
+	picture.self_modulate = Color(picture_byte / 128.0, picture_byte / 128.0, picture_byte / 128.0, 1.0)
+	overlay_sprite.self_modulate = Color(overlay_byte / 128.0, overlay_byte / 128.0, overlay_byte / 128.0, 1.0)
+	glow_sprite.self_modulate = Color(glow_byte / 128.0, glow_byte / 128.0, glow_byte / 128.0, 1.0)
+
+
+## The game's sine table (4096 to a turn): the quarter wave and its mirror, as rsin reads it.
+const SINE_ONE := 4096
+const SHADE_NEUTRAL := 128
+static var _sine_quarter := PackedInt32Array()
+
+
+static func _rsin(angle: int) -> int:
+	if _sine_quarter.is_empty():
+		_sine_quarter.resize(1025)
+		for i in 1025:
+			_sine_quarter[i] = roundi(SINE_ONE * sin(i * TAU / 4096.0))
+	if angle <= 0x400:
+		return _sine_quarter[angle]
+	if angle <= 0x800:
+		return _sine_quarter[0x800 - angle]
+	if angle <= 0xC00:
+		return -_sine_quarter[angle - 0x800]
+	return -_sine_quarter[0x1000 - angle]
 
 
 func _tween_viewport(target: Vector2, frames: int) -> void:
@@ -1334,6 +1407,7 @@ func _talk_kind(code: int) -> int:
 
 func _physics_process(delta: float) -> void:
 	busts.frame(delta)
+	_pulse_step()
 
 
 ## The text state setup from a stream's state (F7, and F8 22), and the operands the state reads when it starts: 5 shows a picture (a

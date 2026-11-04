@@ -817,11 +817,13 @@ def parts_of(bank: bytes, offset: int):
     return flags, tpage, clut, parts
 
 
-def draw_object(vram: Vram, bank: bytes, offset: int, x: int, y: int, page: int, clut_x: int, clut_y: int, wide: bool, canvas, margin: int = 0, canvas_w: int = 0, canvas_h: int = 0, cell_offset: bool = True, texture=(0, 0), blend: bool = False, semi: bool = False):
+def draw_object(vram: Vram, bank: bytes, offset: int, x: int, y: int, page: int, clut_x: int, clut_y: int, wide: bool, canvas, margin: int = 0, canvas_w: int = 0, canvas_h: int = 0, cell_offset: bool = True, texture=(0, 0), blend: bool = False, semi: bool = False, layered: bool = False):
     """the sprite sheet rendering for one frame: `page` and the CLUT are the object's, `wide` is 8 bits per pixel. The canvas
     is the screen (plus the margin) unless canvas_w and canvas_h give it another size. The header's CLUT offset applies only when
     the object carries the texture cell offset flag (0x20), which cell_offset says. `texture` is the object's own (u, v)
-    base (field_5E), added to every cell's texel coordinates; 0, 0 for the usual objects."""
+    base (field_5E), added to every cell's texel coordinates; 0, 0 for the usual objects. With `layered`, a semi-transparent
+    texel is kept at full alpha (its colour, not averaged) for the player to add: the glow's mode is ABR 1, B + F (tpage 0x234, bits 5-6),
+    so the player draws that layer with blend add."""
     du, dv = texture
     flags, tpage, clut, parts = parts_of(bank, offset)
     width = canvas_w or SCREEN_W + margin * 2
@@ -855,7 +857,10 @@ def draw_object(vram: Vram, bank: bytes, offset: int, x: int, y: int, page: int,
                 colour = vram.colour(cx, cy, index)
                 if colour and blend and colour & 0x8000:
                     at = (py * width + px) * 4
-                    canvas[at:at + 4] = average(bytes(canvas[at:at + 4]), colour)
+                    if layered:
+                        canvas[at:at + 4] = rgba(colour)
+                    else:
+                        canvas[at:at + 4] = average(bytes(canvas[at:at + 4]), colour)
                 elif colour and semi:
                     # a whole semi-transparent object (its primitives' semi-transparency bit, average mode): every drawn texel is half
                     # its colour over what is behind it, as the PS1 draws the trade panel's cells over the sand (semi_rgba)
@@ -2766,12 +2771,18 @@ def story_images(script: bytes):
     return images
 
 
-def story_picture(wa: bytes, exe: bytes, image: int) -> bytes:
-    """One story picture as the window the game shows at viewport (0, 0), RGBA 320 x 160. the picture transfer request puts the record's
-    tiles at VRAM (0, 256) and its last sector's four palette rows at (0, 240). the picture object rebuild then draws the base object
-    (page 0x10, CLUT row 0) and up to two overlays from the tail table's stream (2, 0, 0): pages 0x12 and 0x14 with CLUT rows 1 and 2
-    at (0, 0) for ids 0x100-0x1FF, and for ids 0x200+ the the data at 0x80090C00 positions on pages 0x14 and 0x16. The 0x200+ base is a 512-wide
-    screen sprite whose sheet selectors the code never sets; the (2, 0, 0) sheet stands in for it here."""
+
+
+def story_layers(wa: bytes, exe: bytes, image: int):
+    """One story picture as its layers, each an RGBA canvas the game draws at viewport (0, 0): the base object (page 0x10, CLUT
+    row 0), then up to two overlays from the tail table's stream (2, 0, 0): pages 0x12 and 0x14 with CLUT rows 1 and 2 for ids
+    0x100-0x1FF, and for ids 0x200+ the data at 0x80090C00 positions on pages 0x14 and 0x16. The 0x200+ base is a 512-wide screen
+    sprite whose sheet selectors the code never sets; the (2, 0, 0) sheet stands in for it here.
+
+    Returns (layers, size, pulse): layers maps "base", "overlay" and "glow" to RGBA bytes (the overlay and glow hold their texels at
+    alpha 255 and the rest at 0; the glow's semi-transparent texels are added by the player, see draw_object). The picture window is 320 x 160; ids 0x200+ are
+    512 x 256. pulse is true when the glow object carries the record value 1: the game then drives the base and the first overlay
+    with a sine pulse (see story_player.gd). The pulse values are not baked."""
     at = lambda a: a - LOAD + HEADER
     mode, index = image >> 8, ((image >> 4) & 15) * 10 + (image & 15)
     stride, first, _ = STORY_MODES[mode]
@@ -2781,46 +2792,61 @@ def story_picture(wa: bytes, exe: bytes, image: int) -> bytes:
     vram.upload_rect(wa[record + (stride - 1) * SECTOR:record + stride * SECTOR], 0, 240, 256, 4)
     tail = exe[at(0x801AC000):at(0x801AC000) + 0x10000]
     sheet = resolve_stream(tail, 2, 0, 0)
-    objects = [(0, 0, 0x10, 0xF0)]
+    # (role, x, y, page, CLUT row) of each object: the first overlay is CLUT row 0xF1 and the glow 0xF2. The glow is 4 bits a texel
+    # (its sprite is made without the 8-bit attribute, the glow mode); the base and the overlay are 8 bits
+    objects = []
+    pulse = False
     if 0x100 <= image < 0x200:
         mask = exe[at(0x80090BA8) + index * 2]
+        value = exe[at(0x80090BA8) + index * 2 + 1]
         if mask & 1:
-            objects.append((0, 0, 0x12, 0xF1))
+            objects.append(("overlay", 0, 0, 0x12, 0xF1))
         if mask & 2:
-            objects.append((0, 0, 0x14, 0xF2))
+            objects.append(("glow", 0, 0, 0x14, 0xF2))
+            pulse = value == 1
     elif image >= 0x200:
-        mask, x1, y1, x2, y2 = exe[at(0x80090C00) + index * 6:at(0x80090C00) + index * 6 + 5]
+        mask, x1, y1, x2, y2, value = exe[at(0x80090C00) + index * 6:at(0x80090C00) + index * 6 + 6]
         if mask & 1:
-            objects.append((x1, y1, 0x14, 0xF1))
+            objects.append(("overlay", x1, y1, 0x14, 0xF1))
         if mask & 2:
-            objects.append((x2, y2, 0x16, 0xF2))
+            objects.append(("glow", x2, y2, 0x16, 0xF2))
+            pulse = value == 1
+    layers = {}
     if image >= 0x200:
         # a 512 x 256 screen sprite over page 0x10 (8 bits, CLUT row 0xF0) with the two overlays at their table positions
-        canvas = bytearray(512 * 256 * 4)
+        base = bytearray(512 * 256 * 4)
         for py in range(256):
             row = [(vram.words[(256 + py) * 1024 + (px >> 1)] >> (8 * (px & 1))) & 0xFF for px in range(512)]
             for px in range(512):
                 # texel index 0 is unused picture area (the art ends where its texels do): left transparent, not palette entry 0
                 if row[px]:
-                    canvas[(py * 512 + px) * 4:(py * 512 + px) * 4 + 4] = rgba(vram.colour(0, 0xF0, row[px]))
-        for x, y, page, row in objects[1:]:
-            draw_object(vram, tail, sheet, x, y, page, 0, row, True, canvas, 0, 512, 256, blend=True)
-        return bytes(canvas)
-    canvas = bytearray(SCREEN_W * SCREEN_H * 4)
-    for n, (x, y, page, row) in enumerate(objects):
-        draw_object(vram, tail, sheet, x, y, page, 0, row, True, canvas, blend=n > 0)
-    window = canvas[:SCREEN_W * STORY_WINDOW_H * 4]
+                    base[(py * 512 + px) * 4:(py * 512 + px) * 4 + 4] = rgba(vram.colour(0, 0xF0, row[px]))
+        layers["base"] = bytes(base)
+        for role, x, y, page, row in objects:
+            layer = bytearray(512 * 256 * 4)
+            draw_object(vram, tail, sheet, x, y, page, 0, row, role != "glow", layer, 0, 512, 256, blend=True, layered=True)
+            layers[role] = bytes(layer)
+        return layers, (512, 256), pulse
+    base = bytearray(SCREEN_W * SCREEN_H * 4)
+    draw_object(vram, tail, sheet, 0, 0, 0x10, 0, 0xF0, True, base)
+    window = base[:SCREEN_W * STORY_WINDOW_H * 4]
     # texels whose colour is 0x0000 are not drawn (the silhouettes, and the empty parts of a picture). The story screen puts a black
-    # backdrop behind the picture, so those pixels show black: the window is made opaque black there, as the screen shows it.
+    # backdrop behind the picture, so those pixels show black: the base window is made opaque black there, as the screen shows it.
     window[3::4] = b"\xff" * (len(window) // 4)
-    return bytes(window)
+    layers["base"] = bytes(window)
+    for role, x, y, page, row in objects:
+        layer = bytearray(SCREEN_W * SCREEN_H * 4)
+        draw_object(vram, tail, sheet, x, y, page, 0, row, role != "glow", layer, blend=True, layered=True)
+        layers[role] = bytes(layer[:SCREEN_W * STORY_WINDOW_H * 4])
+    return layers, (SCREEN_W, STORY_WINDOW_H), pulse
 
 
 def bake_story_scenes(wa: bytes, exe: bytes, output: Path) -> int:
-    """Every story picture on the disc, written as scenes/<id>.png plus scenes/layout.json: the window size, the viewport (0, 0) the
-    script leaves it at, and the 512 x 256 base extent for ids 0x200+. The script stages some pictures with its own opcodes and
-    others from inside dialog text (F7 05), so every non-empty record is baked; ids are the record's mode and decimal index in
-    nibbles (mode << 8 | tens << 4 | units)."""
+    """Every story picture on the disc, written as scenes/<id>.png (the base layer), scenes/<id>_overlay.png and
+    scenes/<id>_glow.png where the picture has them, plus scenes/layout.json: the window size, the viewport (0, 0) the script
+    leaves it at, the 512 x 256 base extent for ids 0x200+, the layers present and whether the glow pulse drives them. The
+    script stages some pictures with its own opcodes and others from inside dialog text (F7 05), so every non-empty record is
+    baked; ids are the record's mode and decimal index in nibbles (mode << 8 | tens << 4 | units)."""
     import json
     script = wa[STORY_PACKAGE + 0x8800:STORY_PACKAGE + 0x9800]
     reached = story_images(script)
@@ -2831,9 +2857,14 @@ def bake_story_scenes(wa: bytes, exe: bytes, output: Path) -> int:
             if not any(wa[record:record + (stride - 1) * SECTOR]):
                 continue
             image = (mode << 8) | ((index // 10) << 4) | (index % 10)
-            size = [512, 256] if image >= 0x200 else [SCREEN_W, STORY_WINDOW_H]
-            written += bool(write_output(output / "story" / "scenes" / f"{image:03x}.png", png(size[0], size[1], story_picture(wa, exe, image)), output))
-            layout[f"{image:03x}"] = {"scene": reached.get(image, -1), "size": size, "viewport": [0, 0], "scroll": image >= 0x200}
+            layers, size, pulse = story_layers(wa, exe, image)
+            stem = output / "story" / "scenes" / f"{image:03x}"
+            written += bool(write_output(stem.with_suffix(".png"), png(size[0], size[1], layers["base"]), output))
+            for role in ("overlay", "glow"):
+                if role in layers:
+                    written += bool(write_output(output / "story" / "scenes" / f"{image:03x}_{role}.png", png(size[0], size[1], layers[role]), output))
+            layout[f"{image:03x}"] = {"scene": reached.get(image, -1), "size": list(size), "viewport": [0, 0], "scroll": image >= 0x200,
+                                      "layers": [role for role in ("overlay", "glow") if role in layers], "pulse": pulse}
     written += bool(write_output(output / "story" / "scenes" / "layout.json", json.dumps(layout, indent=1) + "\n", output))
     return written
 
