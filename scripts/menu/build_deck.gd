@@ -73,7 +73,7 @@ const DIALOG_RECT := Rect2(48, 96, 224, 48)   # the flagged text box creation(0,
 const DIALOG_TEXT := Vector2(48, 97)          # the text's pen: its string opens with a blank cell, so the words start at 56 (the reference's 57)
 const DIALOG_PANEL := Rect2(15, 82, 290, 72)   # the black panel the confirmation sits in (measured on the reference: x 15 to 305, y 82 to 154)
 const BAR_RAMP := [0.03, 0.12, 0.22, 0.3, 0.38, 0.47, 0.56, 0.66, 0.75, 0.85, 0.94, 0.75, 0.56, 0.28, 0.0]   # the choice bar's brightness, row by row
-const DIALOG_FADE := 0x58                   # the board's level with the confirmation up (0xFF normal, 0x40 under the viewer)
+const DIALOG_FADE := 0xA0                   # the board's level with the confirmation up (0xFF normal, 0x40 under the viewer); the reference's fade level
 const DIALOG_LINE_TOP := 111.0              # the first choice line's highlight top (measured on the reference: the bar sits 111 to 121), 12 a line
 # the pointer's places in the workspace: the ORDER bars of the two panes (the sort name's bar cycles the sort), the L2, L1, R1 and R2
 # pictures of the page column (the deck pane's left edge, the page_buttons picture at (320, 40) and its two groups)
@@ -194,6 +194,7 @@ func _ready() -> void:
 		board.add_child(layer)
 		row_layers.append(layer)
 	viewer_shade.color = Color(0, 0, 0, 0)
+	dim_subtract.blend_mode = CanvasItemMaterial.BLEND_MODE_SUB
 	viewer_shade.size = Vector2(320, 240)
 	viewer_shade.z_index = 8
 	clip.add_child(viewer_shade)
@@ -555,8 +556,14 @@ func _physics_process(_delta: float) -> void:
 		viewer_fade = mini(viewer_fade + 2, target)
 	elif viewer_fade > target:
 		viewer_fade = maxi(viewer_fade - 2, target)
-	var level := DIALOG_FADE if dialog_open and not viewer_open else viewer_fade
-	viewer_shade.color = Color(0, 0, 0, 1.0 - level / 255.0)
+	if dialog_open and not viewer_open:
+		# the confirmation's dim is a subtractive box of grey 0xFF - level, its colour kept to 5 bits (v << 3): the board loses 88 at 0xA0
+		var grey := ((0xFF - DIALOG_FADE) >> 3) << 3
+		viewer_shade.material = dim_subtract
+		viewer_shade.color = Color(grey / 255.0, grey / 255.0, grey / 255.0, 1.0)
+	else:
+		viewer_shade.material = null
+		viewer_shade.color = Color(0, 0, 0, 1.0 - viewer_fade / 255.0)
 	_refresh_rows()
 	board.queue_redraw()
 
@@ -835,7 +842,8 @@ var viewer_closing := false
 var viewer_slide := 0                      # ticks of the slide so far
 var viewer_id := 0                         # the card shown
 var viewer_fade := 255                     # the board's brightness level (0xFF, 0x40 with the viewer up)
-var viewer_shade := ColorRect.new()        # the board's dim: black at 1 - level / 255
+var viewer_shade := ColorRect.new()        # the board's dim: black at 1 - level / 255 (the confirmation's is subtractive, see dim_subtract)
+var dim_subtract := CanvasItemMaterial.new()
 var viewer_node := Node2D.new()            # the window's own layer above the board
 var viewer_frame := Sprite2D.new()
 var viewer_art := Sprite2D.new()
