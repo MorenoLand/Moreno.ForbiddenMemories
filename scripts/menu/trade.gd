@@ -30,7 +30,7 @@ const FRAME := "res://assets/screens/story/frame.png"
 const SLOT_TWO := "user://save2.json"
 const CARD_COUNT := 722
 const CHEST_LIMIT := 250                   # CARD_CHEST_QUANTITY_MAX
-const OFFER_LIMIT := 10                    # a side offers ten cards at most (the data at 0x80185C9C[side][0] < 10)
+const OFFER_LIMIT := 10                    # a side offers ten cards at most
 const VISIBLE := 7                         # rows of the inventory on screen
 const CARD_UI := "res://assets/screens/card_ui/"      # the card-kind offer icons (card_type_*.png, tools/extract.py bake_card_ui)
 var icon_cache: Dictionary = {}
@@ -52,12 +52,14 @@ const CHOICE_LEAVE := 2
 const CHOICE_LABELS := ["EXECUTE TRADE", "RE-SELECT", "RETURN TO TITLE"]
 const STRING_SETTLED := 10                 # SETTLED!
 const STRING_HELP := 11                    # SELECT CARD TO TRADE: the help panel up when the screen opens (OK, CANCEL, SELECTION COMPLETE, SELECT CARD)
+const CHOICE_BOX := Rect2(64, 56, 192, 128)  # the choice box (measured on the reference frame: its light edge at x 64 and 255, y 56 to 183)
+const CHOICE_TOP := 76.0                    # the first choice's line; the lines are CHOICE_STEP apart
+const CHOICE_STEP := 24.0
 const HELP_ORIGIN := Vector2(24, 32)       # the help's first line (its own panel, over the lists until the first card is offered)
 const HELP_BOX_RECT := Rect2(24, 32, 272, 160)   # the help panel's box (measured on the reference frame: its top corners at y 24, its side points at x 16 and 304)
 const TextBoxBg := preload("res://scripts/ui/text_box_bg.gd")
 const STRING_WRITING := 196                # NOW TRADING CARD(S) ...
 const STRING_FAILED := 197                 # TRADE FAILED!
-const STRING_COMPLETE := 198               # TRADE COMPLETE!
 const KEYS := [
 	{"up": [KEY_W], "down": [KEY_S], "page_up": [KEY_A], "page_down": [KEY_D], "add": [KEY_E], "cancel": [KEY_Q], "ready": [KEY_F]},
 	# player 2 also has Triangle (ready) and L1 (cancel) on the touch controls, which have no slash or backspace
@@ -80,7 +82,7 @@ var state := "browse"                 # browse, choice, writing, message
 var choice := CHOICE_EXECUTE
 var help_up := false                  # the help panel is up (it goes once a card is offered)
 var help_box: Node2D                  # the help's flagged box (text_box_bg.gd): the subtractive hexagon over the lists
-var message_id := 0                   # the message up: STRING_COMPLETE or STRING_FAILED
+var message_id := 0                   # the message up: STRING_FAILED
 var timer := 0
 var repeat: Dictionary = {}
 var held: Dictionary = {}
@@ -90,6 +92,9 @@ var right_pending := false
 var right_at := Vector2.ZERO
 var wheel_steps: Array = [0, 0]      # per side: wheel notches over its list, negative up, positive down; one row each
 var rows_node: Array = [Node2D.new(), Node2D.new()]
+var settled_node := Node2D.new()      # the SETTLED! box over a settled column
+var choice_node := Node2D.new()       # the centred box of the three choices (a dark stone plate with a light edge)
+var frames_node := Node2D.new()       # the navy cells of the seven rows of each column (the card list's boxes, drawn empty or not)
 var offers_node: Array = [Node2D.new(), Node2D.new()]
 var cursor_node := Node2D.new()
 var cursor_texture: Texture2D                 # the red cursor bar of the rows (the trade cursor object, 128 x 18)
@@ -169,6 +174,17 @@ func _ready() -> void:
 		world.add_child(rows_node[i])
 		world.add_child(offers_node[i])
 		_rebuild(i)
+	frames_node.z_index = -1
+	frames_node.draw.connect(_draw_frames)
+	world.add_child(frames_node)
+	frames_node.queue_redraw()
+	settled_node.z_index = 3
+	settled_node.draw.connect(_draw_settled)
+	world.add_child(settled_node)
+	choice_node.z_index = 6
+	choice_node.draw.connect(_draw_choice)
+	choice_node.visible = false
+	world.add_child(choice_node)
 	cursor_node.z_index = 2
 	for i in 2:
 		var dim := ColorRect.new()
@@ -328,37 +344,87 @@ func _rebuild(side: int) -> void:
 			break
 		var id: int = rows[index]
 		var name := str(cards.card(id).get("name", ""))
-		if name.length() > 13:
-			name = name.substr(0, 13)
-		text.layout(rows_node[side], _bytes(name), Vector2(x + 34, ROW_TOP + r * ROW_STEP + 3), TEXT_ADVANCE, 0, sharp, true)
-		text.layout(rows_node[side], _bytes("%3d" % _working(side, id)), Vector2(x + 128, ROW_TOP + r * ROW_STEP + 3), TEXT_ADVANCE, 0,
-			sharp, true)
+		text.layout(rows_node[side], _bytes("%03d" % id), Vector2(x + 3, ROW_TOP + r * ROW_STEP + 1), TEXT_ADVANCE, 0, sharp, true)
+		text.layout(rows_node[side], _bytes(name), Vector2(x + 30, ROW_TOP + r * ROW_STEP + 1), TEXT_ADVANCE, 0, sharp, true)
 	_clear(offers_node[side])
 	var offers: Array = s["offers"]
 	for k in offers.size():
 		var at := Vector2(OFFER_X[side] + (k % 5) * OFFER_STEP.x, OFFER_Y + (k / 5) * OFFER_STEP.y)
 		_offer_icon(offers_node[side], int(offers[k]), at)
+		text.layout(offers_node[side], _bytes("%03d" % int(offers[k])), at + Vector2(-4, 4), TEXT_ADVANCE, 0, sharp, true)
 	cursor_node.queue_redraw()
 
 
+## The SETTLED! box over a settled side's column (the reference's box at (40 + 160 * side, 112), 80 by 26).
 func _refresh_status() -> void:
 	_clear(status_node)
 	for side in 2:
-		var x: int = COLUMN_X[side]
-		var name_bytes: Array = []
-		for w in sides[side]["name"]:
-			name_bytes.append(text.code_for_sjis(int(w)) if int(w) != 0 else 0)
-		text.layout(status_node, name_bytes, Vector2(x + 34, 13), TEXT_ADVANCE, 0, sharp, true)
 		if sides[side]["ready"]:
-			text.layout(status_node, _bytes("SETTLED"), Vector2(x + 96, 13), TEXT_ADVANCE, 0, sharp, true)   # inside the column (56 wide)
+			var x: int = COLUMN_X[side] + 40
+			text.layout(status_node, text.string_bytes(STRING_SETTLED), Vector2(x + 8, 120), TEXT_ADVANCE, 0, sharp, true)
+	settled_node.queue_redraw()
+
+
+func _draw_settled() -> void:
+	for side in 2:
+		if not sides[side]["ready"]:
+			continue
+		var r := Rect2(COLUMN_X[side] + 40, 112, 80, 26)
+		settled_node.draw_rect(r, Color8(33, 33, 32))
+		settled_node.draw_rect(Rect2(r.position, Vector2(r.size.x, 1)), Color8(240, 240, 240))
+		settled_node.draw_rect(Rect2(r.position + Vector2(0, r.size.y - 1), Vector2(r.size.x, 1)), Color8(240, 240, 240))
+		settled_node.draw_rect(Rect2(r.position, Vector2(1, r.size.y)), Color8(240, 240, 240))
+		settled_node.draw_rect(Rect2(r.position + Vector2(r.size.x - 1, 0), Vector2(1, r.size.y)), Color8(240, 240, 240))
+
+
+## The seven rows of each column: a 22-pixel band per row (the card list's boxes): an id cell and a name cell, each a navy
+## interior with a dark frame, a dark rule under it, then a grey and a highlight line; grey and highlight edges between the cells.
+func _draw_frames() -> void:
+	var navy := Color8(0, 0, 32)
+	var dark := Color8(0, 0, 16)
+	var grey := Color8(64, 56, 80)
+	var hl := Color8(24, 32, 48)
+	for side in 2:
+		var c: int = COLUMN_X[side]
+		for r in VISIBLE:
+			var y: int = 35 + r * 22
+			frames_node.draw_rect(Rect2(c + 0, y, 1, 22), hl)
+			frames_node.draw_rect(Rect2(c + 1, y, 1, 22), grey)
+			frames_node.draw_rect(Rect2(c + 2, y, 2, 22), dark)
+			frames_node.draw_rect(Rect2(c + 26, y, 2, 22), dark)
+			frames_node.draw_rect(Rect2(c + 28, y, 1, 22), grey)
+			frames_node.draw_rect(Rect2(c + 29, y, 1, 22), hl)
+			frames_node.draw_rect(Rect2(c + 30, y, 2, 22), dark)
+			frames_node.draw_rect(Rect2(c + 156, y, 2, 22), dark)
+			frames_node.draw_rect(Rect2(c + 158, y, 1, 22), grey)
+			frames_node.draw_rect(Rect2(c + 159, y, 1, 22), hl)
+			for span in [[c + 4, 22], [c + 32, 124]]:
+				var x: int = span[0]
+				var w: int = span[1]
+				frames_node.draw_rect(Rect2(x, y, w, 2), dark)
+				frames_node.draw_rect(Rect2(x, y + 2, w, 16), navy)
+				frames_node.draw_rect(Rect2(x, y + 18, w, 2), dark)
+				frames_node.draw_rect(Rect2(x, y + 20, w, 1), grey)
+				frames_node.draw_rect(Rect2(x, y + 21, w, 1), hl)
+		# the offers' grid under the seven rows: two more bands, cut by the offers' own frames (the reference's lists end at y 220)
+		for span in [[c + 4, 22], [c + 32, 124]]:
+			var bx: int = span[0]
+			var bw: int = span[1]
+			frames_node.draw_rect(Rect2(bx, 189, bw, 2), dark)
+			frames_node.draw_rect(Rect2(bx, 191, bw, 11), navy)
+			frames_node.draw_rect(Rect2(bx, 202, bw, 2), dark)
+			frames_node.draw_rect(Rect2(bx, 204, bw, 1), grey)
+			frames_node.draw_rect(Rect2(bx, 205, bw, 2), dark)
+			frames_node.draw_rect(Rect2(bx, 207, bw, 11), navy)
+			frames_node.draw_rect(Rect2(bx, 218, bw, 2), dark)
+			frames_node.draw_rect(Rect2(bx, 220, bw, 1), grey)
 
 
 func _draw_cursor() -> void:
 	for side in 2:
 		var s: Dictionary = sides[side]
-		if s["rows"].is_empty():
-			continue
-		var r: int = int(s["cursor"]) - int(s["top"])
+		# the reference draws a column's cursor bar on its first row even when the column is empty
+		var r: int = 0 if s["rows"].is_empty() else int(s["cursor"]) - int(s["top"])
 		if r < 0 or r >= VISIBLE:
 			continue
 		if cursor_texture != null:
@@ -379,29 +445,43 @@ func _show_frame(bytes: Array, origin := TEXT_ORIGIN) -> void:
 func _show_help() -> void:
 	help_up = true
 	_show_frame(text.string_bytes(STRING_HELP), HELP_ORIGIN)
-	# the names and the lists are not drawn under the help: they come up with the first offer
-	for i in 2:
-		rows_node[i].visible = false
+	# the names and the lists are drawn under the help (the reference's opening screen shows them)
 	status_node.visible = false
+	frames_node.visible = false
 
 
 func _hide_frame() -> void:
 	_clear(prompt_node)
 	panel.visible = false
 	help_box.visible = false
+	choice_node.visible = false
 
 
 ## The three choices (string 0x20): the chosen one in the game's first colour, the others in the red ramp.
 func _show_choice() -> void:
-	var bytes: Array = []
+	_clear(prompt_node)
+	panel.visible = false
+	help_box.visible = false
+	choice_node.visible = true
+	choice_node.queue_redraw()
 	for i in CHOICE_LABELS.size():
-		bytes.append_array([0xF8, 0x0A, 0 if i == choice else 4])
-		bytes.append_array(_bytes(CHOICE_LABELS[i]))
-		bytes.append_array([0xF8, 0x0A, 0])
-		bytes.append(0xFE)
-	bytes.pop_back()
-	bytes.append(0xFF)
-	_show_frame(bytes)
+		var line: Array = _bytes(CHOICE_LABELS[i])
+		var width := line.size() * TEXT_ADVANCE.x
+		var at := Vector2(160 - width / 2.0, CHOICE_TOP + i * CHOICE_STEP)
+		var bytes: Array = [0xF8, 0x0A, 0 if i == choice else 4]
+		bytes.append_array(line)
+		bytes.append(0xFF)
+		text.layout(prompt_node, bytes, at, TEXT_ADVANCE, 0, sharp, true)
+
+
+func _draw_choice() -> void:
+	var r := CHOICE_BOX
+	choice_node.draw_rect(r, Color8(33, 33, 32))
+	var edge := Color8(240, 240, 240)
+	choice_node.draw_rect(Rect2(r.position, Vector2(r.size.x, 1)), edge)
+	choice_node.draw_rect(Rect2(r.position + Vector2(0, r.size.y - 1), Vector2(r.size.x, 1)), edge)
+	choice_node.draw_rect(Rect2(r.position, Vector2(1, r.size.y)), edge)
+	choice_node.draw_rect(Rect2(r.position + Vector2(r.size.x - 1, 0), Vector2(1, r.size.y)), edge)
 
 
 func _show_message(id: int) -> void:
@@ -459,6 +539,7 @@ func _physics_process(_delta: float) -> void:
 	if not ready_ok or not visible:
 		return
 	_step_column_dim()
+	settled_node.visible = state == "browse"   # the SETTLED! boxes go under the choice
 	match state:
 		"browse":
 			_browse()
@@ -485,6 +566,7 @@ func _step_column_dim() -> void:
 			if c < 0x41 or c >= 0x80:
 				cursor_speed[side] = -int(cursor_speed[side])
 	cursor_node.queue_redraw()
+	frames_node.queue_redraw()
 
 
 func _browse() -> void:
@@ -505,6 +587,11 @@ func _browse() -> void:
 func _side_input(side: int) -> void:
 	var keys: Dictionary = KEYS[side]
 	var s: Dictionary = sides[side]
+	# the help panel takes the input until a cross: the first add press (taken or refused) closes it and nothing else is read
+	if help_up:
+		if _edge("add%d" % side, keys["add"]):
+			_add(side)
+		return
 	var rows: Array = s["rows"]
 	var other: Dictionary = sides[1 - side]
 	var click_row := -1
@@ -562,6 +649,14 @@ func _side_input(side: int) -> void:
 
 ## Cross on a card: the card goes to the offer (SE 7); a full offer, an empty chest or a settled side refuses (9).
 func _add(side: int) -> void:
+	if help_up:
+		help_up = false
+		_hide_frame()
+		for i in 2:
+			rows_node[i].visible = true
+		status_node.visible = true
+		frames_node.visible = true
+		frames_node.queue_redraw()
 	var s: Dictionary = sides[side]
 	var rows: Array = s["rows"]
 	if rows.is_empty():
@@ -576,12 +671,6 @@ func _add(side: int) -> void:
 		return
 	(s["offers"] as Array).append(id)
 	sound.emit(7)
-	if help_up:
-		help_up = false
-		_hide_frame()
-		for i in 2:
-			rows_node[i].visible = true
-		status_node.visible = true
 	_rebuild(side)
 
 
@@ -662,14 +751,17 @@ func _write_step() -> void:
 	timer += 1
 	if timer < WRITE_FRAMES:
 		return
+	# a trade that went through goes straight back to the open screen: the reference shows no completion text (its frames 900 vblanks on are
+	# the trade's lists with nothing up); a failed write shows TRADE FAILED! until a press
 	if _execute():
-		_show_message(STRING_COMPLETE)
-	else:
-		_show_message(STRING_FAILED)
+		_hide_frame()
+		state = "browse"
+		return
+	_show_message(STRING_FAILED)
 	state = "message"
 
 
-## The message closes with a confirm or a cancel: after TRADE COMPLETE! the screen goes on, after TRADE FAILED! the choice returns.
+## The message closes with a confirm or a cancel: after TRADE FAILED! the choice returns.
 func _message() -> void:
 	if not (_edge("modal_confirm", MODAL_CONFIRM) or _edge("modal_cancel", MODAL_CANCEL) or click_pending or right_pending):
 		return
